@@ -71,6 +71,14 @@ check_untyped_defs = true
 warn_unused_configs = true
 warn_unused_ignores = false
 
+# cli_menus.py is interactive menu plumbing exec'd into cli.py's namespace;
+# its ~90 _op_/_menu_ handlers take injected console/helper params where
+# annotations add churn without safety. Bodies are still type-checked.
+[[tool.mypy.overrides]]
+module = "scm_mcp_mssp.cli_menus"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
 # Remaining type-check debt: asbuilt_report (5382-line report builder) still has
 # ~16 errors to work through. All other modules are now fully type-checked.
 [[tool.mypy.overrides]]

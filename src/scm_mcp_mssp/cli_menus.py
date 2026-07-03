@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from rich import box
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
@@ -35,7 +36,9 @@ def _call_mcp_tool(tenant: TenantConfig, register_fn: Any, tool_name: str, **kwa
     mcp = FastMCP("cli-internal")
     register_fn(mcp, lambda tenant_id="": get_scm_client(tenant))
     tool = mcp._tool_manager.get_tool(tool_name)  # noqa: SLF001
-    return tool.fn(**kwargs)
+    if tool is None:
+        raise RuntimeError(f"tool {tool_name!r} is not registered by {register_fn.__name__}")
+    return str(tool.fn(**kwargs))
 
 
 # ── sub-menu: Config & Inventory ──────────────────────────────────────────
@@ -1735,30 +1738,26 @@ def _op_airs_list(tenant, console, _pause) -> None:
 
 
 def _op_mssp_tenant_dashboard(tenant, console, _pause) -> None:
-    from .auth.oauth import get_scm_client
+    from .tools.ops import register_ops_tools
 
-    client = get_scm_client(tenant)
     with console.status("[cyan]Building tenant dashboard...[/cyan]"):
         try:
-            from .dashboard import build_dashboard
-
-            result = build_dashboard(client)
-            console.print(result)
+            result = _call_mcp_tool(tenant, register_ops_tools, "scm_tenant_dashboard")
+            console.print(Markdown(result))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
     _pause()
 
 
 def _op_noc_dashboard(tenant, console, _pause) -> None:
-    from .auth.oauth import get_scm_client
+    from .tools.ops import register_ops_tools
 
-    get_scm_client(tenant)
     with console.status("[cyan]Building NOC health dashboard...[/cyan]"):
         try:
-            from .tools.ops import _build_noc_dashboard
-
-            result = _build_noc_dashboard()
-            console.print(result)
+            result = _call_mcp_tool(
+                tenant, register_ops_tools, "scm_tenant_dashboard", include_expired=True
+            )
+            console.print(Markdown(result))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
     _pause()
@@ -1796,16 +1795,12 @@ def _op_license_info(tenant, console, _pause) -> None:
 
 
 def _op_license_forecast(tenant, console, _pause) -> None:
-    from .auth.oauth import fetch_licenses, get_scm_client
-
-    client = get_scm_client(tenant)
     with console.status("[cyan]Forecasting licence expiry...[/cyan]"):
         try:
-            licenses = fetch_licenses(client)
-            from .tools.ops import _format_expiry_forecast
+            from .tools.ops import register_ops_tools
 
-            result = _format_expiry_forecast(licenses)
-            console.print(result)
+            result = _call_mcp_tool(tenant, register_ops_tools, "scm_licence_forecast")
+            console.print(Markdown(result))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
     _pause()
@@ -2109,14 +2104,16 @@ def _op_upgrade_path(tenant, console, _pause) -> None:
 
 
 def _op_snippet_catalogue(tenant, console, _pause) -> None:
-    from .audit.tiers import TIER_DEFINITIONS
+    from .audit.tiers import TIERS
 
-    for tier_name, tier_def in TIER_DEFINITIONS.items():
+    for tier_name, tier_def in TIERS.items():
         t = Table(title=f"MSSP Tier Snippets — {tier_name.upper()}", box=box.SIMPLE_HEAD)
-        t.add_column("Framework", style="cyan")
-        t.add_column("Snippets")
-        for fw, snippets in getattr(tier_def, "snippets", {}).items():
-            t.add_row(fw, ", ".join(snippets) if snippets else "—")
+        t.add_column("NCSC Frameworks", style="cyan")
+        t.add_column("Onboarding Snippets")
+        t.add_row(
+            ", ".join(tier_def.ncsc_frameworks) or "—",
+            ", ".join(tier_def.scm_snippets) or "—",
+        )
         console.print(t)
     _pause()
 
@@ -2419,14 +2416,16 @@ def _op_config_clone(tenant, console, _pause) -> None:
     with console.status("[cyan]Cloning config...[/cyan]"):
         try:
             from .audit.cloner import clone_config
+            from .auth.oauth import get_scm_client
 
-            result = clone_config(
+            client = get_scm_client(tenant)
+            report = clone_config(
+                client,
                 source_backup_file=backup_file,
                 target_folder=target_folder,
-                target_tenant_id=tenant.tenant_id,
                 dry_run=dry_run,
             )
-            console.print(result)
+            console.print(Markdown(report.to_markdown()))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
     _pause()

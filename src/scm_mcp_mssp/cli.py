@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from rich import box
 from rich.align import Align
@@ -315,7 +315,7 @@ def _print_main_menu(tenant: TenantConfig | None) -> None:
 # ── operation handlers ───────────────────────────────────────────────────────
 
 
-def _require_tenant(tenant: TenantConfig | None) -> bool:
+def _require_tenant(tenant: TenantConfig | None) -> TypeGuard[TenantConfig]:
     if tenant is None:
         console.print("\n[red]No tenant selected. Choose option 9 first.[/red]")
         Prompt.ask("\nPress Enter to continue")

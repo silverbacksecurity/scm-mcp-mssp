@@ -210,7 +210,7 @@ def _find_pandoc() -> str | None:
     if p:
         return p
     try:
-        import pypandoc
+        import pypandoc  # type: ignore[import-untyped]
 
         return str(pypandoc.get_pandoc_path())
     except Exception:

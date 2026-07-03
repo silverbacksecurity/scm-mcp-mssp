@@ -37,8 +37,9 @@ COPY --from=builder --chown=scm-mcp:scm-mcp /app/venv /app/venv
 
 WORKDIR /app
 
-# settings.toml is safe to bundle; .secrets.toml is injected at runtime
-COPY --chown=scm-mcp:scm-mcp settings.toml ./
+# Ship the example as the in-image default; operators mount their real
+# settings.toml (tenant registry) and .secrets.toml at runtime.
+COPY --chown=scm-mcp:scm-mcp settings.example.toml ./settings.toml
 
 USER scm-mcp
 
