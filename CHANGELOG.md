@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scm_spi_status`** — Service Provider Interconnect visibility (pan.dev `sase/mt-interconnect`, Feb 2026): one view-based tool covering interconnect summary/inventory, physical connections, SPI regions, tenant settings, and IP-pool usage monitoring; actionable 401/403/404/5xx messages for accounts without an MSP role (`tools/mt_interconnect.py`)
+- **`scm_pab_msp_summary` / `scm_pab_msp_report`** — Prisma Access Browser for MSP reporting (pan.dev `sase/pab-msp`, Feb 2026): region-level user/tenant/CIE roll-ups and per-TSG security-event reports (blocked malware, websites, extensions, category breakdowns) — browser-control evidence for CE/NCSC reporting (`tools/pab_msp.py`)
+- **`scripts/gen_tool_from_spec.py`** — spec-driven tool scaffolding: emits read-only MCP tool scaffolds (typed query params, docstrings, graceful 4xx/5xx rendering) for any endpoint-catalog family, fetching specs pinned to the catalog's pan.dev commit; scaffolds are curated into consolidated tools before registration
+- **`ROADMAP.md`** — tracks new pan.dev API families and planned coverage (SPI in AS-BUILT/NOC, PAB posture columns, Config Orchestration site-based RN, mt-monitor aggregates, Insights 2.0, 5G)
 - **pan.dev endpoint catalog** — bundled index of 1,593 endpoints across 23 API families generated from the MIT-licensed pan.dev OpenAPI specs (`sase`, `scm`, `access` trees) with per-file git blob SHAs (`resources/endpoint_catalog.json` + loader `resources/endpoint_catalog.py`, regenerate via `scripts/gen_endpoint_catalog.py`); REST fallbacks in `audit.extractor` now resolve SDK resource names to their exact documented URL (override → SDK `ENDPOINT` → catalog → naive slug) instead of guessing a slug; `scm_check_updates` gains an **OpenAPI Spec Drift** section that diffs the bundled catalog's blob SHAs against the live pan.dev tree (4 unauthenticated GitHub API calls) and reports new/changed/removed spec files — new API families like SP Interconnect or Prisma Browser for MSP now surface automatically
 
 ## [0.6.0] - 2026-06-30
