@@ -15,6 +15,7 @@ import warnings
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any
 
+from ..resources.endpoint_catalog import find_endpoint
 from ..utils.logging import get_logger
 from .models import AuditSnapshot
 
@@ -144,15 +145,7 @@ def extract_snapshot(client: Any, folder: str, tenant_id: str) -> AuditSnapshot:
             if "validation error" in err.lower():
                 session = getattr(client, "session", None)
                 if session is not None:
-                    path = _REST_PATH_OVERRIDE.get(attr)
-                    if path is None:
-                        # Use the SDK resource's own ENDPOINT (e.g. /config/security/v1/...)
-                        # which is versioned correctly; fall back to naive slug otherwise.
-                        resource_obj = getattr(client, attr, None)
-                        sdk_endpoint = getattr(resource_obj, "ENDPOINT", None)
-                        path = sdk_endpoint or ("/" + attr.replace("_", "-") + "s")
-                    # Absolute URLs verbatim; /config/... paths → prepend host.
-                    url = path if path.startswith("https://") else f"{_SCM_API_HOST}{path}"
+                    url = _rest_fallback_url(client, attr)
                     try:
                         raw = _rest_list(session, url, dict(kwargs))
                         if raw:
@@ -808,13 +801,21 @@ def _rest_list(
     return []
 
 
-def _rest_fallback_url(client: Any, attr: str) -> str | None:
-    """Resolve the REST URL for an SDK resource, mirroring _safe()'s resolution."""
+def _rest_fallback_url(client: Any, attr: str) -> str:
+    """Resolve the REST URL for an SDK resource (used by _safe() and the
+    standalone list tools).
+
+    Resolution order: explicit override → the SDK resource's own ENDPOINT →
+    the bundled pan.dev endpoint catalog → naive slug as a last resort."""
     path = _REST_PATH_OVERRIDE.get(attr)
     if path is None:
         resource_obj = getattr(client, attr, None)
-        sdk_endpoint = getattr(resource_obj, "ENDPOINT", None)
-        path = sdk_endpoint or ("/" + attr.replace("_", "-") + "s")
+        path = getattr(resource_obj, "ENDPOINT", None)
+    if path is None:
+        catalog_url = find_endpoint(attr)
+        if catalog_url:
+            return catalog_url
+        path = "/" + attr.replace("_", "-") + "s"
     return path if path.startswith("https://") else f"{_SCM_API_HOST}{path}"
 
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **pan.dev endpoint catalog** — bundled index of 1,593 endpoints across 23 API families generated from the MIT-licensed pan.dev OpenAPI specs (`sase`, `scm`, `access` trees) with per-file git blob SHAs (`resources/endpoint_catalog.json` + loader `resources/endpoint_catalog.py`, regenerate via `scripts/gen_endpoint_catalog.py`); REST fallbacks in `audit.extractor` now resolve SDK resource names to their exact documented URL (override → SDK `ENDPOINT` → catalog → naive slug) instead of guessing a slug; `scm_check_updates` gains an **OpenAPI Spec Drift** section that diffs the bundled catalog's blob SHAs against the live pan.dev tree (4 unauthenticated GitHub API calls) and reports new/changed/removed spec files — new API families like SP Interconnect or Prisma Browser for MSP now surface automatically
+
 ## [0.6.0] - 2026-06-30
 
 ### Added

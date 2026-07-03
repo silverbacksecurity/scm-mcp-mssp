@@ -371,6 +371,58 @@ def _gh_recent_commits(owner: str, repo: str, path: str, n: int = 5) -> list[dic
     return data if isinstance(data, list) else []
 
 
+_SPEC_EXTS = (".yaml", ".yml", ".json")
+
+
+def _spec_drift() -> tuple[dict, list[str], list[str], list[str]] | None:
+    """Compare the bundled endpoint catalog's spec-file blob SHAs against the
+    live pan.dev tree. Returns (catalog_meta, new, changed, removed) file
+    lists, or None when the catalog or the GitHub API is unavailable.
+
+    Uses one contents call plus one recursive tree call per spec tree
+    (openapi-specs/{sase,scm,access}) — 4 unauthenticated requests total.
+    """
+    try:
+        from ..resources.endpoint_catalog import catalog_meta
+
+        meta = catalog_meta()
+    except Exception:
+        return None
+    if not meta.get("files"):
+        return None
+
+    root = _http_get_json(
+        "https://api.github.com/repos/PaloAltoNetworks/pan.dev/contents/openapi-specs"
+    )
+    if not isinstance(root, list):
+        return None
+    tree_names = {t.split("/", 1)[1] for t in meta.get("trees", [])}
+    upstream: dict[str, str] = {}
+    for entry in root:
+        name = entry.get("name", "")
+        if name not in tree_names or entry.get("type") != "dir":
+            continue
+        tree = _http_get_json(
+            f"https://api.github.com/repos/PaloAltoNetworks/pan.dev/git/trees/"
+            f"{entry.get('sha', '')}?recursive=1"
+        )
+        if not isinstance(tree, dict):
+            return None
+        for item in tree.get("tree", []):
+            if item.get("type") == "blob" and item.get("path", "").endswith(_SPEC_EXTS):
+                upstream[f"openapi-specs/{name}/{item['path']}"] = item.get("sha", "")
+
+    if not upstream:
+        return None
+    bundled: dict[str, str] = {
+        rel: sha for rel, sha in meta["files"].items() if rel.endswith(_SPEC_EXTS)
+    }
+    new = sorted(rel for rel in upstream if rel not in bundled)
+    changed = sorted(rel for rel, sha in upstream.items() if rel in bundled and bundled[rel] != sha)
+    removed = sorted(rel for rel in bundled if rel not in upstream)
+    return meta, new, changed, removed
+
+
 # ── Tool registration ─────────────────────────────────────────────────────────
 
 
@@ -1869,6 +1921,39 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
             lines.append("")
         else:
             lines += ["_GitHub API unavailable or no recent changes._", ""]
+
+        # ── 4. OpenAPI spec drift vs bundled endpoint catalog ─────────────────
+        lines += ["## pan.dev — OpenAPI Spec Drift (vs bundled endpoint catalog)", ""]
+        drift = _spec_drift()
+        if drift is None:
+            lines += ["_Bundled catalog missing or GitHub API unavailable._", ""]
+        else:
+            meta, new, changed, removed = drift
+            lines.append(
+                f"Catalog generated {meta['generated_at'][:10]} from pan.dev "
+                f"`{meta['pan_dev_commit'][:12]}` — {meta['total_paths']} endpoints, "
+                f"{len(meta['families'])} families."
+            )
+            lines.append("")
+            if not (new or changed or removed):
+                lines += ["🟢 Upstream specs unchanged — catalog is current.", ""]
+            else:
+                lines += [
+                    f"🟡 Upstream drift: **{len(new)} new**, **{len(changed)} changed**, "
+                    f"**{len(removed)} removed** spec file(s):",
+                    "",
+                    "| Status | Spec file |",
+                    "|--------|-----------|",
+                ]
+                for label, group in (("new", new), ("changed", changed), ("removed", removed)):
+                    for rel in group[:10]:
+                        lines.append(f"| {label} | `{rel}` |")
+                lines += [
+                    "",
+                    "Regenerate with: `uv run --with pyyaml python "
+                    "scripts/gen_endpoint_catalog.py`",
+                    "",
+                ]
 
         lines.append(f"*Checked {now_str}*")
         return "\n".join(lines)
