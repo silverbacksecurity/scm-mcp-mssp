@@ -1,0 +1,39 @@
+title: SCM MCP - Authentication Failure Spike
+id: a1b2c3d4-0001-4e5f-8a9b-scmmcp000001
+status: production
+description: >
+  Detects repeated SCM OAuth2 authentication failures for a single tenant,
+  which may indicate credential stuffing, a rotated secret not yet updated,
+  or a compromised client_id.
+author: silverbacksec
+date: 2026-06-17
+references:
+  - https://github.com/silverbacksecurity/scm-mcp-mssp
+
+logsource:
+  product: scm-mcp-mssp
+  service: scm-mcp
+  # JSON field emitted by structlog in auth/oauth.py:
+  #   {"event": "authentication_error", "tenant_id": "...", "error": "..."}
+
+detection:
+  selection:
+    event: authentication_error
+  condition: selection | count() by tenant_id > 5
+
+  timeframe: 10m
+
+falsepositives:
+  - Credential rotation in progress (expect brief spike, then recovery)
+  - Initial MSSP onboarding with incorrect secrets
+
+level: high
+
+tags:
+  - attack.credential_access
+  - attack.t1110  # Brute Force
+
+fields:
+  - tenant_id
+  - error
+  - timestamp

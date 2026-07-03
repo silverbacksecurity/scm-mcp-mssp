@@ -1,0 +1,91 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [master, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Conventional commit title check
+  pr-title:
+    name: PR Title
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read  # action reads the PR title via the API
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            chore
+            refactor
+            test
+            ci
+            perf
+
+  # Warn on very large PRs
+  pr-size:
+    name: PR Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Count changed lines
+        run: |
+          CHANGED=$(git diff --stat origin/${{ github.base_ref }}...HEAD | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
+          DELETED=$(git diff --stat origin/${{ github.base_ref }}...HEAD | tail -1 | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
+          FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | wc -l)
+          echo "Changed files: $FILES | Insertions: $CHANGED | Deletions: $DELETED"
+          if [ "$FILES" -gt 50 ]; then
+            echo "::warning::Large PR with $FILES changed files — consider splitting."
+          fi
+
+  # Full CI gate: lint + typecheck + test must pass before merge
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    needs: []
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Lint
+        run: uv run ruff check src/ tests/
+
+      - name: Format
+        run: uv run ruff format --check src/ tests/
+
+      - name: Type check
+        run: uv run mypy src/
+
+      - name: Test with coverage
+        run: uv run pytest --cov=src/scm_mcp_mssp --cov-report=xml --cov-report=term-missing
+        env:
+          SCM_MCP_SCM_TENANT_ID: "test-tenant"
+          SCM_MCP_SCM_CLIENT_ID: "test@iam"
+          SCM_MCP_SCM_CLIENT_SECRET: "test-secret"
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pr-coverage-${{ github.event.pull_request.number }}
+          path: coverage.xml
+          retention-days: 7

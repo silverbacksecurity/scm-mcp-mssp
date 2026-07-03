@@ -1,0 +1,59 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# hatch-vcs auto-generated version file (regenerated at build time)
+src/scm_mcp_mssp/_version.py
+
+# Virtual environments
+.venv
+
+# Secrets & environment
+.env
+.secrets.toml
+*.key
+*.pem
+# Tenant registry — TSG IDs, client IDs, and customer labels identify customers.
+# Copy settings.example.toml → settings.toml and keep it local.
+settings.toml
+
+# Generated reports — contain live customer topology/policy data, never commit
+reports/
+*.docx
+# Ad-hoc root-level report files (any filename containing these patterns)
+*hld*.md
+*hld*.docx
+*asbuilt*.md
+*asbuilt*.docx
+*bpa-*.md
+*ncsc-*.md
+bt-*.md
+BT-*.md
+BT-*.docx
+tenant-*.md
+
+# Dev artefacts
+ai-design-components/
+backups/
+scripts/gen_docs.py
+
+# Testing / quality
+.coverage
+.pytest_cache/
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

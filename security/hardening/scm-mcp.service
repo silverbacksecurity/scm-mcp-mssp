@@ -1,0 +1,94 @@
+# /etc/systemd/system/scm-mcp.service
+# Hardened systemd unit for scm-mcp-mssp.
+# Installed by harden-server.sh.
+#
+# Usage:
+#   systemctl enable --now scm-mcp
+#   journalctl -u scm-mcp -f
+
+[Unit]
+Description=SCM MCP MSSP Server
+Documentation=https://github.com/silverbacksecurity/scm-mcp-mssp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scm-mcp
+Group=scm-mcp
+WorkingDirectory=/opt/scm-mcp-mssp
+ExecStart=/opt/scm-mcp-mssp/.venv/bin/scm-mcp --transport stdio
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# Secrets are read from here at startup (700, owned by scm-mcp)
+EnvironmentFile=-/etc/scm-mcp-mssp/env
+
+# Structured JSON logs go to journal (collected by rsyslog for SIEM)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=scm-mcp
+
+# ── systemd security hardening ────────────────────────────────────────────────
+# Prevent privilege escalation
+NoNewPrivileges=true
+
+# Private /tmp — isolates temp files from other services
+PrivateTmp=true
+
+# No access to physical devices
+PrivateDevices=true
+
+# Read-only view of /home (service has no user home)
+ProtectHome=true
+
+# Mount / and /usr read-only; allow writes only to specified paths
+ProtectSystem=strict
+ReadWritePaths=/opt/scm-mcp-mssp/logs /run/scm-mcp
+
+# Restrict kernel tunable writes
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+
+# Restrict /proc and /sys visibility
+ProtectProc=invisible
+ProcSubset=pid
+
+# Prevent hostname / clock changes
+ProtectHostname=true
+ProtectClock=true
+
+# Restrict control groups
+ProtectControlGroups=true
+
+# Drop all capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Lock personality (prevent switching execution domain)
+LockPersonality=true
+
+# Deny memory execution (no JIT / shellcode)
+MemoryDenyWriteExecute=true
+
+# Restrict realtime scheduling
+RestrictRealtime=true
+
+# Restrict namespace creation
+RestrictNamespaces=true
+
+# Restrict address families to IPv4/IPv6 only (needed for SCM API calls)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Allowlist only the syscalls a Python network service needs
+SystemCallFilter=@system-service @network-io @file-system
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# Limit open file descriptors
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

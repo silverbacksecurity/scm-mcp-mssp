@@ -1,0 +1,89 @@
+[project]
+name = "scm-mcp-mssp"
+dynamic = ["version"]
+description = "MCP server for Palo Alto Networks Strata Cloud Manager — MSSP multi-tenant edition"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "silverbacksec" }]
+keywords = ["palo-alto", "scm", "strata-cloud-manager", "mcp", "mssp", "network-security"]
+dependencies = [
+    "dynaconf>=3.2.13",
+    "markdown>=3.10.2",
+    "mcp>=1.28.1",
+    "pan-scm-sdk>=0.15.1",
+    "prisma-sase>=6.6.2b1",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.14.2",
+    "PyJWT>=2.0",
+    "anthropic>=0.113.0",
+    "python-docx>=1.2.0",
+    "rich>=15.0.0",
+    "structlog>=26.1.0",
+    "uvicorn>=0.29.0",
+    "pypandoc-binary>=1.17",
+]
+
+[project.scripts]
+scm-mcp = "scm_mcp_mssp.server:main"
+scm-mcp-http = "scm_mcp_mssp.server_http:main"
+scm-mcp-cli = "scm_mcp_mssp.cli:main"
+
+[dependency-groups]
+dev = [
+    "hatch-vcs>=0.5.0",
+    "mypy>=2.1.0",
+    "pre-commit>=4.6.0",
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.17",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/scm_mcp_mssp/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scm_mcp_mssp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["src/scm_mcp_mssp/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_unused_configs = true
+warn_unused_ignores = false
+
+# Remaining type-check debt: asbuilt_report (5382-line report builder) still has
+# ~16 errors to work through. All other modules are now fully type-checked.
+[[tool.mypy.overrides]]
+module = [
+    "scm_mcp_mssp.audit.asbuilt_report",
+]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=src/scm_mcp_mssp --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/scm_mcp_mssp"]
+omit = ["*/tests/*"]

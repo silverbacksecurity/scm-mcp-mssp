@@ -1,0 +1,2047 @@
+# SCM MCP MSSP — Tool Reference
+
+> Auto-generated from source docstrings. Do not edit manually — run `scripts/gen_docs.py` to regenerate.
+
+All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
+
+**84 tools** across 13 modules.
+
+## Table of Contents
+
+- [Audit & Reporting](#audit-reporting)
+- [Deployment & Connectivity](#deployment-connectivity)
+- [Enterprise DLP](#enterprise-dlp)
+- [MSSP Multi-Tenant](#mssp-multi-tenant)
+- [NCSC Baseline](#ncsc-baseline)
+- [Network](#network)
+- [Objects](#objects)
+- [Prisma SD-WAN](#prisma-sd-wan)
+- [Security Policy & Profiles](#security-policy-profiles)
+- [Setup & Tenant Management](#setup-tenant-management)
+- [AI Compliance Advisor](#ai-compliance-advisor)
+- [Operational Visibility](#operational-visibility)
+- [Utility](#utility)
+
+---
+
+## Audit & Reporting
+
+_Configuration backup, BPA, NCSC, AS-BUILT reports, config diff & clone._
+
+### `scm_config_backup`
+
+Export a complete SCM configuration snapshot to a JSON backup file.
+
+```
+Pulls all resource types for the folder (addresses, security rules,
+profiles, zones, VPN, deployment, etc.) and writes a timestamped JSON
+file. The backup file can be used as input to scm_config_diff and as
+the data source for the AS-IS AS-BUILT report.
+
+Args:
+    folder: SCM folder to back up.
+    tenant_id: SCM tenant ID (MSSP mode).
+    output_dir: Directory to write the backup file (default: ./backups).
+
+Returns:
+    Path to the written backup file and a resource count summary.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `output_dir` | `str` | `''` |
+
+### `scm_bpa_assess`
+
+Run Palo Alto Networks Best Practice Assessment checks against live SCM config.
+
+```
+Pulls the current configuration from SCM and evaluates it against PAN
+best practice checks (security rules, threat prevention profiles, URL
+filtering, decryption, zone protection, and logging).
+
+Each finding includes:
+- Check ID and severity (critical/high/medium/low)
+- Pass/Fail/Warn status
+- Affected object names
+- Remediation guidance
+- NCSC control cross-references
+
+Args:
+    folder: SCM folder to assess.
+    tenant_id: SCM tenant ID (MSSP mode).
+    severity_filter: Filter to a severity level (critical/high/medium/low).
+    failed_only: If true, return only failed and warned checks.
+
+Returns:
+    JSON-formatted BPA findings.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `severity_filter` | `str` | `''` |
+| `failed_only` | `bool` | `False` |
+
+### `scm_ncsc_assess`
+
+Assess SCM configuration against UK NCSC compliance frameworks.
+
+```
+Evaluates the live SCM configuration against:
+- NCSC CAF v4.0 (Cyber Assessment Framework, August 2025)
+- Cyber Essentials v3.2 (firewall controls)
+- NCSC 10 Steps to Cyber Security (network security steps)
+
+Returns a control-by-control compliance view showing which NCSC
+controls are satisfied, breached, or cannot be assessed.
+
+Args:
+    folder: SCM folder to assess.
+    tenant_id: SCM tenant ID (MSSP mode).
+    framework: Filter to framework — 'caf', 'ce', '10steps', or 'all'.
+
+Returns:
+    JSON NCSC compliance view with per-control status.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `framework` | `str` | `'all'` |
+
+### `scm_audit_report`
+
+Generate a combined BPA + NCSC compliance report for a SCM folder.
+
+```
+Produces a full AS-BUILT audit document covering:
+- Configuration inventory (addresses, rules, profiles, zones, VPN)
+- PAN Best Practice Assessment findings with remediation guidance
+- NCSC CAF v4.0 / Cyber Essentials v3.2 / 10 Steps cross-reference
+- Prioritised remediation action list
+
+Args:
+    folder: SCM folder to assess.
+    tenant_id: SCM tenant ID (MSSP mode).
+    output_format: 'markdown' or 'json'.
+    save_to: Optional file path to write the report to disk.
+
+Returns:
+    The full report as a string (Markdown or JSON).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `output_format` | `str` | `'markdown'` |
+| `save_to` | `str` | `''` |
+
+### `scm_asbuilt_report`
+
+Generate a full Prisma SASE AS-IS AS-BUILT document.
+
+```
+Pulls live configuration from SCM and produces a structured 9-section
+AS-BUILT covering:
+
+  2. Deployed Prisma SASE Architecture — live topology Mermaid diagram,
+     management plane, compute locations and egress IP reference
+  3. Prisma Access Infrastructure — Remote Networks (branches with IPSec
+     tunnels, BGP, QoS), Service Connections (DCs), Mobile Users
+     (GlobalProtect portals, IP pools, forwarding profiles)
+  4. Prisma SD-WAN — ION inventory template (manual; not in SCM API)
+  5. SSE & Zero Trust — threat prevention, SWG, ZTNA security rules
+  6. Identity & Posture — authentication profiles, SAML IdPs, HIP checks
+  7. Observability — log forwarding profiles, syslog/HTTP destinations
+  8. MSSP Service Model — RACI, MACD, ITSM integration, SLA matrix
+  9. Appendices — subnet/IP pool tables, public egress IP whitelist
+     reference, VPN crypto profiles
+
+Sections that cannot be derived from the SCM API (SD-WAN, ADEM, CDL,
+SOAR, CIE) are clearly marked with ⚠️ manual-input placeholders.
+
+Args:
+    folder: SCM folder to report on.
+    tenant_id: SCM tenant ID (MSSP mode).
+    customer_name: Customer name shown in the document header.
+    mssp_name: MSSP name shown in the document header.
+    doc_version: Document version string (e.g. "1.0").
+    output_format: 'markdown' (default) or 'docx' (requires pandoc).
+    include_sdwan: If True, pull live SD-WAN data (sites, elements,
+                   WAN interfaces, policies) using the same credentials.
+                   Fills §4 with real data instead of placeholders.
+    save_to: Optional file path to write the report to disk.
+             For docx format defaults to '<customer_name>-asbuilt.docx'
+             if not specified.
+    include_extended: If True, also pull CASB/DLP profiles, ZTNA
+                      Connector inventory, and Prisma Browser config.
+                      Adds extra API calls — only enable when those
+                      sections are needed and the tenant has the licences.
+
+Returns:
+    Full Markdown AS-BUILT as a string, or a docx save-path confirmation.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `customer_name` | `str` | `''` |
+| `mssp_name` | `str` | `'MSSP'` |
+| `doc_version` | `str` | `'1.0'` |
+| `output_format` | `str` | `'markdown'` |
+| `include_sdwan` | `bool` | `False` |
+| `include_extended` | `bool` | `False` |
+| `save_to` | `str` | `''` |
+
+### `scm_config_diff`
+
+Compare two SCM config backup files and report differences.
+
+```
+Useful for change auditing — run a backup before and after a change
+window to produce a structured diff of what was added, removed, or
+modified across all resource types.
+
+Args:
+    backup_file_a: Path to the baseline backup JSON file.
+    backup_file_b: Path to the comparison backup JSON file.
+
+Returns:
+    JSON diff report showing added, removed, and changed resources.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `backup_file_a` | `str` | `—` |
+| `backup_file_b` | `str` | `—` |
+
+### `scm_config_clone`
+
+Clone a SCM config backup into a new folder or tenant.
+
+```
+Loads a JSON backup created by scm_config_backup, sanitises every
+object (strips system fields, rewrites the folder, scrubs PSKs), then
+pushes it to the target folder in dependency order:
+
+  Tags → Addresses → Groups → Security profiles → Log profiles →
+  Zones → Rules (pre, post, NAT, decryption) → Deployment (optional)
+
+Typical use-cases
+-----------------
+- MSSP golden-config template → new customer tenant (speed up onboarding)
+- MSSP takeover migration → move config from old MSSP to new tenant
+- POV → Prod promotion (clone lab folder to production folder)
+- Multi-site rollout (one branch config → N sites with same structure)
+
+PSK safety
+----------
+Pre-shared keys in IKE gateways are ALWAYS replaced with
+CHANGEME_<gateway-name>. The report lists every gateway that needs
+a real PSK set before committing.
+
+Args:
+    source_backup_file: Path to a JSON backup from scm_config_backup.
+    target_folder: Destination SCM folder name.
+    target_tenant_id: Destination tenant (empty = same tenant as server default).
+    name_prefix: Prefix prepended to every object name (e.g. "CUST1_").
+                 Useful when cloning into a shared folder.
+    anonymise_ips: Replace all IPv4 literals with {{IP_N}} template
+                   variables. Use when sharing configs as templates.
+    include_deployment: Also clone IKE gateways, IPSec tunnels,
+                        Remote Networks, and Service Connections.
+                        These go into fixed SCM folders (Remote Networks,
+                        Service Connections) regardless of target_folder.
+    skip_rules: Omit all security, NAT, decryption, and app-override
+                rules. Useful when cloning only the object library.
+    on_conflict: What to do if an object with the same name already
+                 exists in the target — 'skip' (default) or 'overwrite'.
+    dry_run: If True (default), preview what would be created without
+             making any API calls. Set to False to execute the push.
+    save_to: Optional file path to write the clone report.
+
+Returns:
+    Markdown clone report showing per-object status and PSK warnings.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `source_backup_file` | `str` | `—` |
+| `target_folder` | `str` | `—` |
+| `target_tenant_id` | `str` | `''` |
+| `name_prefix` | `str` | `''` |
+| `anonymise_ips` | `bool` | `False` |
+| `include_deployment` | `bool` | `False` |
+| `skip_rules` | `bool` | `False` |
+| `on_conflict` | `str` | `'skip'` |
+| `dry_run` | `bool` | `True` |
+| `save_to` | `str` | `''` |
+
+---
+
+## Deployment & Connectivity
+
+_Remote Networks, Service Connections, Bandwidth Allocations, Jobs, Commits._
+
+### `scm_remote_network_list`
+
+List remote networks (branch/SD-WAN connections) in SCM.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_remote_network_get`
+
+Fetch details for a single remote network.
+
+```
+Args:
+    name: Remote network name.
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_service_connection_list`
+
+List service connections (cloud/DC interconnects) in SCM.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_bandwidth_allocation_list`
+
+List bandwidth allocations for Prisma Access compute locations.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_commit`
+
+Commit pending SCM configuration changes.
+
+```
+Commits the candidate config for the listed folders.  This is
+the equivalent of 'commit' on a firewall — required after any
+create/update/delete operation to make changes effective.
+
+Args:
+    folders: Folders whose changes to commit.
+    description: Commit description / change ticket reference.
+    tenant_id: SCM tenant ID.
+    admin: Optional admin name to attribute the commit to.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folders` | `list[str]` | `—` |
+| `description` | `str` | `''` |
+| `tenant_id` | `str` | `''` |
+| `admin` | `str` | `''` |
+
+### `scm_job_status`
+
+Check the status of an asynchronous SCM job (e.g. commit).
+
+```
+Args:
+    job_id: Job ID returned by commit or other async operations.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `job_id` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_list_jobs`
+
+List SCM configuration jobs (commits, pushes) showing who triggered each one.
+
+```
+Returns recent jobs ordered newest-first, including the SCM username (uname)
+who triggered each job, the job type, result, timestamps, and description.
+Use this to audit commit history, find who last changed config, or investigate
+failed pushes.
+
+Job types include: Commit, CommitAndPush, NGFW_Push, PA_Push.
+Result values: OK, FAIL, PENDING, RUNNING.
+
+Args:
+    tenant_id: SCM tenant ID. Defaults to the configured default tenant.
+    limit: Maximum jobs to return (default 50, max 200).
+    offset: Pagination offset.
+    job_type: Optional filter — e.g. "Commit" or "NGFW_Push".
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `50` |
+| `offset` | `int` | `0` |
+| `job_type` | `str` | `''` |
+
+---
+
+## Enterprise DLP
+
+_Enterprise DLP profile listing, backup, and restore._
+
+### `dlp_enterprise_list`
+
+List Enterprise DLP data patterns and data profiles for a tenant.
+
+```
+Queries the PAN Enterprise DLP API (api.dlp.paloaltonetworks.com)
+which covers ML-based DLP patterns used by Prisma SaaS Security and
+Cloud SWG — distinct from inline SCM data-filtering-profiles.
+
+If company_id is omitted the tool auto-discovers it via
+GET /v1/config/companies.
+
+Args:
+    tenant_id:  SCM tenant ID (MSSP mode). Omit for default tenant.
+    company_id: Enterprise DLP company ID. Auto-discovered if blank.
+
+Returns:
+    Markdown summary of Enterprise DLP data patterns and profiles.
+
+Ref: https://pan.dev/dlp/api/
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `company_id` | `str` | `''` |
+
+### `dlp_backup`
+
+Export full DLP configuration as a JSON backup for cross-tenant redeployment.
+
+```
+Exports two layers of DLP config:
+
+  SCM DLP (inline):
+    - Data filtering profiles  (/config/v1/data-filtering-profiles)
+    - Data objects             (/config/v1/data-objects)
+
+  Enterprise DLP (ML-based, optional):
+    - Data patterns            (api.dlp.paloaltonetworks.com data-patterns)
+    - Data profiles            (api.dlp.paloaltonetworks.com data-profiles)
+
+The returned JSON can be passed directly to `dlp_restore` to provision
+an identical DLP configuration on another tenant/folder.
+
+Args:
+    folder:             SCM folder to export inline DLP from (default: All).
+    tenant_id:          Source tenant ID (MSSP mode).
+    company_id:         Enterprise DLP company ID. Auto-discovered if blank.
+    include_enterprise: Include Enterprise DLP patterns and profiles (default: True).
+
+Returns:
+    JSON backup payload (pretty-printed).
+
+Ref: https://pan.dev/dlp/api/
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'All'` |
+| `tenant_id` | `str` | `''` |
+| `company_id` | `str` | `''` |
+| `include_enterprise` | `bool` | `True` |
+
+### `dlp_restore`
+
+Restore a DLP backup onto a target tenant/folder.
+
+```
+Accepts a JSON backup produced by `dlp_backup` and provisions the
+contained DLP objects on the target tenant:
+
+  1. SCM data objects             → POST /config/v1/data-objects
+  2. SCM data filtering profiles  → POST /config/v1/data-filtering-profiles
+  3. Enterprise DLP data patterns → POST /v1/config/companies/{cid}/data-patterns
+  4. Enterprise DLP data profiles → POST /v1/config/companies/{cid}/data-profiles
+
+Objects are skipped if a resource with the same name already exists
+(HTTP 409 / 400 duplicate-name response).
+
+Args:
+    backup_json:   JSON string produced by `dlp_backup`.
+    target_folder: SCM folder to restore inline DLP objects into.
+    tenant_id:     Target tenant ID (MSSP mode).
+    company_id:    Enterprise DLP company ID for the target tenant.
+                   Auto-discovered if blank.
+    dry_run:       If True (default), only report what would be created.
+                   Set to False to apply changes.
+
+Returns:
+    Markdown restore report listing created / skipped / failed objects.
+
+Ref: https://pan.dev/dlp/api/
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `backup_json` | `str` | `—` |
+| `target_folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `company_id` | `str` | `''` |
+| `dry_run` | `bool` | `True` |
+
+---
+
+## MSSP Multi-Tenant
+
+_Tier assessment, onboarding, dashboard, licensing, CDL, CASB, ZTNA, Browser, NGFW, AIRS._
+
+### `mssp_tier_assess`
+
+Score a tenant folder against its contracted MSSP service tier.
+
+```
+Pulls live SCM configuration, runs all BPA checks, then scores results
+against the tier requirements:
+  Bronze — Critical checks must pass (CE baseline)
+  Silver — Critical + High checks must pass (CE Plus)
+  Gold   — All checks must pass (CAF v4.0)
+
+Args:
+    folder: SCM folder to assess.
+    tier: Service tier to assess against (gold/silver/bronze).
+          If omitted, uses the tenant's configured tier.
+    tenant_id: SCM tenant ID (MSSP mode).
+
+Returns:
+    JSON tier compliance result with breach list and score percentage.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tier` | `str` | `''` |
+| `tenant_id` | `str` | `''` |
+
+### `mssp_tier_report`
+
+Generate a Markdown tier compliance report for a customer folder.
+
+```
+Produces a customer-facing document showing:
+- Service tier description and included features
+- Compliance score against tier requirements
+- Breach findings with remediation steps
+- Advisory findings (higher tier, for upsell context)
+- Upgrade path to next tier
+
+Args:
+    folder: SCM folder to assess.
+    tier: Service tier (gold/silver/bronze).
+    tenant_id: SCM tenant ID.
+    save_to: Optional file path to write the report.
+
+Returns:
+    Markdown compliance report.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tier` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `save_to` | `str` | `''` |
+
+### `mssp_upgrade_path`
+
+Show what's needed to upgrade a tenant from one tier to another.
+
+```
+Analyses the live configuration against the target tier requirements
+and returns:
+- Blocking findings that must be resolved before upgrading
+- Additional NCSC controls that become mandatory
+- New SCM snippets that need to be applied
+- New features included in the target tier
+
+Args:
+    folder: SCM folder to assess.
+    from_tier: Current contracted tier (gold/silver/bronze).
+    to_tier: Target tier (gold/silver/bronze).
+    tenant_id: SCM tenant ID.
+
+Returns:
+    JSON upgrade gap analysis.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `from_tier` | `str` | `—` |
+| `to_tier` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `mssp_onboard_tenant`
+
+Onboard a new customer tenant with the correct tier snippet set.
+
+```
+Checks whether required tier snippets exist in SCM and reports which
+are present vs missing. With dry_run=False, associates existing snippets
+with the target folder.
+
+Args:
+    folder: Customer SCM folder name.
+    tier: Service tier to apply (gold/silver/bronze).
+    tenant_id: SCM tenant ID.
+    create_folder: If True, create the folder if it doesn't exist.
+    dry_run: If True (default), report actions without executing.
+             Set to False to apply snippet associations.
+
+Returns:
+    Onboarding plan or execution result with snippet status.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tier` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `create_folder` | `bool` | `False` |
+| `dry_run` | `bool` | `True` |
+
+### `mssp_tenant_dashboard`
+
+Show a summary dashboard of all loaded MSSP tenants and their tier status.
+
+```
+Lists every tenant currently cached in the server, showing their
+configured tier, folder, label, and service term.
+
+Args:
+    tenant_id: Not used for filtering — returns all loaded tenants.
+
+Returns:
+    Markdown dashboard of all tenants.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `mssp_snippet_catalogue`
+
+List MSSP tier snippet templates and their content specifications.
+
+```
+Shows what each tier's SCM snippets should contain, enabling
+engineers to create the correct snippets in SCM before onboarding.
+
+Args:
+    tier: Filter to a specific tier (gold/silver/bronze) or omit for all.
+
+Returns:
+    Markdown catalogue of snippet templates by tier.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tier` | `str` | `''` |
+
+### `scm_mobile_user_stats`
+
+Show Prisma Access mobile user allocation and current logged-in user count.
+
+```
+Uses the Prisma Access Insights API to retrieve live connected user counts,
+plus bandwidth allocation from SCM config.
+
+Args:
+    tenant_id: SCM tenant ID. Omit to use the default tenant.
+    region: Prisma Access Insights region for X-PANW-Region header
+            (e.g. 'eu' for Europe, 'us' for US). Default: 'eu'.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `region` | `str` | `'eu'` |
+
+### `scm_license_info`
+
+List all Prisma SASE subscription licences for a tenant, with expiry dates.
+
+```
+Calls the Palo Alto Networks Subscription Service API
+(GET /subscription/v1/licenses) using the tenant's existing OAuth session.
+Returns a Markdown table grouped by product, showing SKU, quantity,
+consumed seats, expiry date, and status (active / expired / expiring soon).
+
+Args:
+    tenant_id: SCM tenant ID.  Omit to use the default tenant.
+
+Returns:
+    Markdown licence summary table.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `scm_dlp_list`
+
+List DLP data-filtering profiles and data objects configured in SCM. Uses the SCM Config REST API (/config/v1/data-filtering-profiles and /config/v1/data-objects) — these are not exposed via the pan-scm-sdk.
+
+```
+Args:
+    folder:    SCM folder scope (default: All).
+    tenant_id: Tenant ID. Omit to use the default tenant.
+
+Returns:
+    Markdown summary of DLP profiles and data objects.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'All'` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_casb_list`
+
+List CASB SaaS tenant restrictions configured in SCM. Uses /config/v1/saas-tenant-restrictions (SCM Config REST API).
+
+```
+Args:
+    folder:    SCM folder scope (default: All).
+    tenant_id: Tenant ID. Omit to use the default tenant.
+
+Returns:
+    Markdown summary of SaaS tenant restriction policies.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'All'` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_ztna_connector_list`
+
+List ZTNA Connector infrastructure (connectors and connector groups). Uses the ZTNA Connector API (/sse/connector/v2.0/api/). Returns an empty result if ZTNA Connector is not licensed/enabled.
+
+```
+Args:
+    tenant_id: Tenant ID. Omit to use the default tenant.
+
+Returns:
+    Markdown summary of ZTNA connectors and groups.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `scm_browser_list`
+
+List Prisma Browser (Remote Browser Isolation / RBI) configuration: device groups, user groups, and application groups. Uses the Prisma Browser Management API (/seb/api/v1/). Returns an empty result if Prisma Browser is not licensed.
+
+```
+Args:
+    tenant_id: Tenant ID. Omit to use the default tenant.
+
+Returns:
+    Markdown summary of Prisma Browser configuration.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `mssp_tier_comparison`
+
+Return a side-by-side comparison of Gold / Silver / Bronze tiers.
+
+```
+Useful for sales and customer conversations — shows what each tier
+includes, which NCSC frameworks it covers, and the check requirements.
+
+Returns:
+    Markdown comparison table.
+```
+
+### `scm_ngfw_device_list`
+
+List NGFW managed devices onboarded to Strata Cloud Manager.
+
+```
+Returns device inventory including model, serial number, software version,
+HA state, connection status, folder assignment, and registration authcode
+(auth_key) where available.
+
+Args:
+    folder:    SCM folder to query (default: ngfw-shared).
+    tenant_id: Tenant ID. Omit to use the default tenant.
+
+Returns:
+    Markdown table of NGFW devices, or a message if none are onboarded.
+
+Ref: https://pan.dev/scm/api/config/ngfw/setup/list-devices/
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'ngfw-shared'` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_airs_list`
+
+List Prisma AIRS (AI Runtime Security) configuration for a tenant.
+
+```
+Queries the AIRS management API for:
+- Customer Applications — AI apps registered for inline API inspection
+- AI Security Profiles — threat detection profile configurations
+- Deployment Profiles — how AIRS is deployed (inline, async, etc.)
+
+Returns 'not licensed' if AIRS is not activated for this tenant.
+
+Args:
+    tenant_id: Tenant ID. Omit to use the default tenant.
+
+Returns:
+    Markdown summary of AIRS configuration.
+
+Ref: https://pan.dev/prisma-airs/api/airuntimesecurity/prismaairsmanagementapi/
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+---
+
+## NCSC Baseline
+
+_Apply NCSC/NIST-aligned security baseline, create reusable snippets, attach profiles, gap analysis._
+
+### `scm_apply_ncsc_baseline`
+
+Create NCSC-compliant security profiles and deny-all rule in a SCM folder.
+
+```
+Creates:
+  - Anti-spyware profile with cloud inline analysis + MICA C2 detectors
+  - Vulnerability protection profile (block critical/high, alert medium)
+  - WildFire antivirus profile (all files, both directions)
+  - URL access profile (block malware/C2/phishing categories)
+  - Log forwarding profile (traffic/threat/wildfire/url/auth → Cortex Data Lake)
+  - Explicit deny-all security rule with logging
+  - NCSC-Compliant tag
+
+NCSC compliance mapping:
+  CAF v4.0  — C3 Identity/Access, C4 Data security, C5 Security monitoring
+  CE v3.2   — Malware protection, Patch management, Network monitoring
+  10 Steps  — Network security, Malware defences, Monitoring
+
+Args:
+    folder: Target SCM folder (e.g. "Shared" or a tenant folder name).
+    dry_run: If True (default) show what WOULD be created without writing.
+    syslog_profile: Optional syslog server profile name to add to log forwarding.
+    overwrite_existing: If True, skip objects that already exist silently.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `dry_run` | `bool` | `True` |
+| `syslog_profile` | `str` | `''` |
+| `overwrite_existing` | `bool` | `False` |
+
+### `scm_attach_ncsc_profiles`
+
+Create the NCSC-Baseline security profile group and attach it to all allow rules in the folder that are missing profiles or log forwarding.
+
+```
+Steps:
+  1. Create (or verify) the 'NCSC-Baseline' profile group referencing the
+     four NCSC baseline profiles
+  2. For every allow rule in the folder that has no profile_setting or
+     no log_setting, update it with:
+       - profile_setting.group = [profile_group_name]
+       - log_setting = 'NCSC-Baseline-Logging'
+       - log_end = True
+
+Only rules stored in an editable folder (not 'All') are updated.
+Rules from folder='All' are read-only predefined rules that cannot be changed.
+
+Args:
+    folder: SCM folder to search for rules (e.g. 'Prisma Access').
+    dry_run: If True (default) show what WOULD be changed without writing.
+    profile_group_name: Name of the profile group to create/use.
+    skip_already_profiled: If True (default), skip rules that already have
+                           a profile group set.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `dry_run` | `bool` | `True` |
+| `profile_group_name` | `str` | `'NCSC-Baseline'` |
+| `skip_already_profiled` | `bool` | `True` |
+
+### `scm_create_ncsc_snippet`
+
+Create an SCM snippet containing NCSC-compliant security profiles.
+
+```
+Creates a named snippet container and populates it with:
+  - Anti-spyware profile (block C2 / critical+high spyware, MICA inline)
+  - Vulnerability protection profile (block critical/high CVEs)
+  - WildFire antivirus profile (all files, both directions, public cloud)
+  - URL access profile (block malware/C2/phishing categories)
+  - Log forwarding profile (traffic/threat/wildfire/url/auth → Cortex Data Lake)
+  - NCSC-Compliant tag
+
+Snippets are reusable configuration bundles that can be pushed to multiple
+tenants or folders — they do NOT contain security rules (rules must be
+created separately in a folder rulebase).
+
+Args:
+    snippet_name: Name of the SCM snippet to create (default: "NCSC-Compliance").
+    dry_run: If True (default) show what WOULD be created without writing.
+    syslog_profile: Optional syslog server profile name to add to log forwarding.
+    description: Description for the snippet container.
+    tenant_id: Tenant to target (default: first loaded tenant).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `snippet_name` | `str` | `'NCSC-Compliance'` |
+| `dry_run` | `bool` | `True` |
+| `syslog_profile` | `str` | `''` |
+| `description` | `str` | `'NCSC CAF v4.0 / CE v3.2 ...'` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_create_nist_snippet`
+
+Create an SCM snippet containing NIST-compliant security profiles.
+
+```
+Creates a named snippet container and populates it with:
+  - Anti-spyware profile (C2 detection, block critical+high spyware)
+  - Vulnerability protection profile (block critical/high CVEs, alert medium)
+  - WildFire antivirus profile (all files, both directions, public cloud)
+  - URL access profile (block malware/C2/phishing categories)
+  - Log forwarding profile (traffic/threat/wildfire/url/auth → Cortex Data Lake)
+  - NIST-Compliant tag
+
+NIST compliance mapping:
+  CSF v2.0   — GV.OC, PR.PS, PR.AA, DE.CM, DE.AE, RS.AN
+  SP 800-53  — SI-2 Flaw Remediation, SI-3 Malware Protection, SI-4 Monitoring,
+               RA-5 Vulnerability Monitoring, AU-2/AU-12 Audit Logging,
+               SC-7 Boundary Protection, AC-3 Access Enforcement
+  SP 800-171 — 3.14 System and Information Integrity
+
+Args:
+    snippet_name: Name of the SCM snippet to create (default: "NIST-Compliance").
+    dry_run: If True (default) show what WOULD be created without writing.
+    syslog_profile: Optional syslog server profile name to add to log forwarding.
+    description: Description for the snippet container.
+    tenant_id: Tenant to target (default: first loaded tenant).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `snippet_name` | `str` | `'NIST-Compliance'` |
+| `dry_run` | `bool` | `True` |
+| `syslog_profile` | `str` | `''` |
+| `description` | `str` | `'NIST CSF v2.0 / SP 800-53 ...'` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_ncsc_gap`
+
+Compare live SCM config against the NCSC baseline and report compliance gaps.
+
+```
+Checks:
+  - Every allow rule has a security profile group and log forwarding
+  - An explicit deny-all rule exists at the bottom of the rulebase
+  - Anti-spyware profiles have cloud inline analysis and MICA C2 detectors
+  - Log forwarding profile covers traffic/threat/wildfire/url log types
+  - NCSC baseline profile objects exist in the folder
+
+Maps gaps to: CAF v4.0, CE v3.2, NCSC 10 Steps, NSF controls.
+
+Args:
+    folder: SCM folder to inspect.
+    position: Security rule position — "pre", "post", or "both".
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `position` | `str` | `'pre'` |
+
+### `scm_nist_gap`
+
+Compare live SCM config against the NIST baseline and report compliance gaps.
+
+```
+Checks:
+  - Every allow rule has a security profile group and log forwarding
+    (NIST CSF PR.AC-5, SP 800-53 AC-3, SC-7)
+  - An explicit deny-all rule exists at the bottom of the rulebase
+    (SP 800-53 SC-7 Boundary Protection)
+  - Anti-spyware profiles have cloud inline analysis and C2 detection
+    (SP 800-53 SI-3 Malware Protection, SI-4 System Monitoring)
+  - Log forwarding profile covers traffic/threat/wildfire/url log types
+    (SP 800-53 AU-2 / AU-12 Audit Logging)
+  - NIST baseline profile objects exist in the folder
+
+Maps gaps to: NIST CSF v2.0 (GV/ID/PR/DE/RS), SP 800-53 Rev 5, SP 800-171.
+
+Args:
+    folder: SCM folder to inspect.
+    position: Security rule position — "pre", "post", or "both".
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `position` | `str` | `'pre'` |
+
+---
+
+## Network
+
+_Zones, NAT rules, IKE gateways, IPSec tunnels, DNS servers._
+
+### `scm_zone_list`
+
+List security zones in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_nat_rule_list`
+
+List NAT rules in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+    position: Rule position — 'pre' or 'post'.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+| `position` | `str` | `'pre'` |
+
+### `scm_nat_rule_get`
+
+Fetch a single NAT rule by name.
+
+```
+Args:
+    name: NAT rule name.
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_ike_gateway_list`
+
+List IKE gateways in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_ipsec_tunnel_list`
+
+List IPSec tunnels in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_dns_server_list`
+
+List DNS server profiles in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+---
+
+## Objects
+
+_Addresses, address groups, services, tags, EDLs._
+
+### `scm_address_list`
+
+List address objects in a SCM folder.
+
+```
+Args:
+    folder: SCM folder (customer context for MSSP).
+    tenant_id: SCM tenant ID; uses default tenant when omitted.
+    limit: Maximum number of results.
+    name_filter: Substring filter on address name.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+| `name_filter` | `str` | `''` |
+
+### `scm_address_get`
+
+Fetch a single address object by name.
+
+```
+Args:
+    name: Address object name.
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_address_create`
+
+Create an address object in SCM.
+
+```
+Provide exactly one of ip_netmask, fqdn, or ip_range.
+
+Args:
+    name: Object name.
+    folder: SCM folder.
+    ip_netmask: CIDR notation (e.g. 10.0.0.0/8).
+    fqdn: Fully qualified domain name.
+    ip_range: IP range (e.g. 10.0.0.1-10.0.0.100).
+    description: Optional description.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `ip_netmask` | `str` | `''` |
+| `fqdn` | `str` | `''` |
+| `ip_range` | `str` | `''` |
+| `description` | `str` | `''` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_address_delete`
+
+Delete an address object by name.
+
+```
+Args:
+    name: Address object name.
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_address_group_list`
+
+List address groups in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum number of results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_service_list`
+
+List service objects in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum number of results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_tag_list`
+
+List tags in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum number of results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_edl_list`
+
+List external dynamic lists (EDLs) in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum number of results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+---
+
+## Prisma SD-WAN
+
+_Sites, elements, WAN interfaces/networks, path groups, policies, topology._
+
+### `sdwan_list_sites`
+
+List Prisma SD-WAN sites (branches, data centres, hub sites).
+
+```
+Returns name, address, site type (branch/dc/hub), element count,
+admin state, and WAN interface count for each site.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Optional specific site ID to fetch.
+
+Returns:
+    JSON array of site objects.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+
+### `sdwan_list_elements`
+
+List Prisma SD-WAN ION elements (physical or virtual appliances).
+
+```
+Returns model, serial, software version, site assignment, HA role,
+and connected state for each element.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Filter to a specific site ID.
+    element_id: Fetch a specific element by ID.
+
+Returns:
+    JSON array of element objects.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+
+### `sdwan_list_wan_interfaces`
+
+List Prisma SD-WAN WAN interfaces for a site or element.
+
+```
+Returns interface name, type (public/private), circuit, bandwidth,
+network label, and link quality for each WAN interface.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Required — site ID to query.
+    element_id: Optional — filter to a specific element.
+
+Returns:
+    JSON array of WAN interface objects.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+
+### `sdwan_list_wan_networks`
+
+List Prisma SD-WAN WAN networks (ISP circuit definitions).
+
+```
+Returns network name, type (publicwan/privatewan/lte), and provider info.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+
+Returns:
+    JSON array of WAN network objects.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `sdwan_list_path_groups`
+
+List Prisma SD-WAN path groups (circuit groupings for policy selection).
+
+```
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+
+Returns:
+    JSON array of path group objects.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `sdwan_list_policies`
+
+List Prisma SD-WAN policy sets.
+
+```
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    policy_type: 'network' (path selection), 'priority' (QoS),
+                 'security' (NGFW), or 'all'.
+
+Returns:
+    JSON policy set summary.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `policy_type` | `str` | `'network'` |
+
+### `sdwan_list_clusters`
+
+List Prisma SD-WAN hub and spoke clusters (HA topology).
+
+```
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+
+Returns:
+    JSON summary of hub clusters and spoke clusters.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `sdwan_list_bgp`
+
+List Prisma SD-WAN BGP configurations and peer status.
+
+```
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Filter to a specific site.
+    element_id: Filter to a specific element.
+
+Returns:
+    JSON BGP configs and peer summary.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+
+### `sdwan_topology_diagram`
+
+Generate a Mermaid VPN overlay topology diagram for Prisma SD-WAN.
+
+```
+Queries the SD-WAN controller topology API (POST /sdwan/v3.6/api/topology)
+to retrieve actual VPN adjacency between sites, then fetches per-link
+health status. Outputs a Mermaid graph TB diagram showing:
+
+  - Hub / DC sites and branch sites as subgraph nodes
+  - WAN cloud networks (Internet, MPLS, LTE) as intermediate cloud nodes
+  - VPN tunnel edges with circuit type and UP/DOWN/degraded status icons
+    ✅ UP  ⚠️ degraded  ❌ down
+
+Suitable for embedding directly in GitHub Markdown, Confluence, or the
+Prisma SASE AS-BUILT (Section 4).
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    save_to: Optional file path to write the diagram to (e.g. topology.md).
+
+Returns:
+    Mermaid diagram as a fenced code block string.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `save_to` | `str` | `''` |
+
+### `sdwan_topology`
+
+Generate a full Prisma SD-WAN topology summary.
+
+```
+Pulls sites, elements, WAN networks, hub/spoke clusters, and policy
+sets to produce a single structured overview of the SD-WAN deployment.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+
+Returns:
+    JSON topology summary with site and element inventory.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `sdwan_debug_topology`
+
+Return the raw JSON from POST /sdwan/v3.6/api/topology for one site.
+
+```
+Used to inspect the actual API response structure so field names can
+be verified against what build_topology expects.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Site ID to query. If omitted, uses the first site found.
+
+Returns:
+    Raw JSON response (first 8 KB) plus the VPN links query result.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+
+---
+
+## Security Policy & Profiles
+
+_Security rules (CRUD), Anti-Spyware profiles, URL categories._
+
+### `scm_security_rule_list`
+
+List security policy rules in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum number of results.
+    position: Rule position — 'pre' or 'post'.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+| `position` | `str` | `'pre'` |
+
+### `scm_security_rule_get`
+
+Fetch a single security rule by name.
+
+```
+Args:
+    name: Rule name.
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_security_rule_create`
+
+Create a security policy rule.
+
+```
+Args:
+    name: Rule name.
+    folder: SCM folder.
+    action: 'allow' or 'deny'.
+    source_zones: Source security zones.
+    destination_zones: Destination security zones.
+    source_addresses: Source addresses/groups (default: ['any']).
+    destination_addresses: Destination addresses/groups (default: ['any']).
+    applications: Application names (default: ['any']).
+    services: Services (default: ['application-default']).
+    profile_setting: Security profile group dict.
+    description: Optional description.
+    disabled: Whether the rule is disabled.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `action` | `str` | `—` |
+| `source_zones` | `list[str]` | `—` |
+| `destination_zones` | `list[str]` | `—` |
+| `source_addresses` | `list[str] | None` | `None` |
+| `destination_addresses` | `list[str] | None` | `None` |
+| `applications` | `list[str] | None` | `None` |
+| `services` | `list[str] | None` | `None` |
+| `profile_setting` | `dict[str, Any] | None` | `None` |
+| `description` | `str` | `''` |
+| `disabled` | `bool` | `False` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_security_rule_delete`
+
+Delete a security rule by name.
+
+```
+Args:
+    name: Rule name.
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_anti_spyware_profile_list`
+
+List anti-spyware profiles in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_url_category_list`
+
+List URL filtering categories in a SCM folder.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+---
+
+## Setup & Tenant Management
+
+_Folders, devices, snippets, tenant list/evict._
+
+### `scm_folder_list`
+
+List SCM folders (represents the tenant/customer hierarchy).
+
+```
+Args:
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_folder_get`
+
+Fetch a single SCM folder by name.
+
+```
+Args:
+    name: Folder name.
+    tenant_id: SCM tenant ID.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `name` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_device_list`
+
+List devices (firewalls, Panorama) onboarded to SCM.
+
+```
+Args:
+    folder: SCM folder.
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `scm_snippet_list`
+
+List configuration snippets available in SCM.
+
+```
+Args:
+    tenant_id: SCM tenant ID.
+    limit: Maximum results.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `limit` | `int` | `200` |
+
+### `mssp_list_tenants`
+
+List all MSSP tenant IDs that currently have active SCM clients.
+
+```
+Returns which tenants are loaded and ready without needing
+re-authentication.
+```
+
+### `mssp_evict_tenant`
+
+Remove a tenant's cached SCM client (forces re-authentication on next use).
+
+```
+Use this after rotating OAuth2 credentials for a customer tenant.
+
+Args:
+    tenant_id: SCM tenant ID to evict.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `—` |
+
+---
+
+## AI Compliance Advisor
+
+_AI-powered gap analysis and remediation playbook generation using Claude._
+
+### `scm_ai_compliance_advisor`
+
+AI-powered compliance advisor: run NCSC/NIST gap checks then generate a remediation playbook and executive summary using Claude.
+
+```
+Combines the gap detection from scm_ncsc_gap / scm_nist_gap with an
+AI layer that interprets findings in plain English and maps each gap
+to concrete SCM remediation steps and MCP tool commands.
+
+Output contains two sections:
+  1. EXECUTIVE SUMMARY  — ≤150 words, risk-focused, suitable for reports
+  2. REMEDIATION PLAYBOOK — one entry per gap (critical → info), with
+     exact fix steps and estimated effort per item
+
+Requirements:
+  - ANTHROPIC_API_KEY environment variable (or SCM_MCP_ANTHROPIC_API_KEY)
+  - anthropic>=0.40.0 installed
+
+Args:
+    folder: SCM folder to assess.
+    framework: 'ncsc', 'nist', or 'both' (default).
+    position: Security rule position — 'pre', 'post', or 'both'.
+    tenant_label: Customer name shown in the AI output (optional).
+    model: Claude model ID override (default: claude-sonnet-4-6).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `—` |
+| `framework` | `str` | `'both'` |
+| `position` | `str` | `'pre'` |
+| `tenant_label` | `str` | `''` |
+| `model` | `str` | `''` |
+
+---
+
+## Operational Visibility
+
+_Certificate expiry scanning, licence forecasting, MSSP NOC dashboard, and SPN bandwidth analysis._
+
+### `scm_cert_scan`
+
+Scan all SCM certificate objects and flag anything expiring within `warn_days` days.
+
+```
+Fetches certificate objects from the SCM config store via the certificates
+REST API and checks each against today's date. Covers CA certificates,
+SSL/TLS inspection certs, IKE certs, and SAML signing certificates stored
+as SCM objects.
+
+Also lists any IKE gateways configured to use certificate authentication
+(rather than pre-shared keys), so the operator can cross-reference gateway
+names against the certificate table.
+
+Args:
+    folder: Primary SCM folder to scan (default: Shared).
+    tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active tenant.
+    warn_days: Highlight certs expiring within this many days (default 90).
+               CRITICAL threshold is always 30 days, WARNING is always 60 days.
+    all_folders: Also scan Remote Networks, Mobile Users, Service Connections
+                 (default: True).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'Shared'` |
+| `tenant_id` | `str` | `''` |
+| `warn_days` | `int` | `90` |
+| `all_folders` | `bool` | `True` |
+
+---
+
+### `scm_licence_forecast`
+
+Forecast licence expiry dates and seat utilisation across tenants.
+
+```
+Pulls subscription licence data from the PAN Subscription Service API and
+groups entries by product (app_id), reporting the earliest expiry per product
+and seat consumption. Useful for proactive renewals and to catch oversubscribed
+licence pools before users are impacted.
+
+Seat utilisation:
+    consumed = purchased_size - remaining_size
+    % used   = consumed / purchased_size × 100
+
+Status thresholds:
+    EXPIRED   — expiry date in the past
+    CRITICAL  — < 30 days remaining
+    WARNING   — < 60 days remaining
+    CAUTION   — < warn_days remaining (default 90)
+    OK        — >= warn_days remaining
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active tenant.
+    warn_days: Flag licences expiring within this many days (default 90).
+    all_tenants: If True, scan every configured MSSP tenant in one call.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `warn_days` | `int` | `90` |
+| `all_tenants` | `bool` | `False` |
+
+---
+
+### `scm_tenant_dashboard`
+
+Multi-tenant NOC health dashboard — traffic-light overview of all tenants.
+
+```
+Performs a fast, lightweight data pull for every configured MSSP tenant and
+returns a single Markdown table suitable for a NOC wallboard or morning
+health check. No full snapshot extraction is run — targeted REST calls only.
+
+Columns: Tenant, Rules, RNs (remote networks), Tunnels (IKE gateways),
+Nearest Expiry, Days, Lic (licence RAG), Errors, RAG (overall health).
+
+RAG rules:
+    🔴 RED    — any licence expired, or auth failure
+    🟡 AMBER  — any licence expiring within 60 days
+    🟢 GREEN  — all licences ≥ 60 days remaining
+```
+
+_No parameters — scans all tenants from settings.toml automatically._
+
+---
+
+### `scm_spn_bandwidth`
+
+SPN bandwidth allocation, branch distribution, and oversubscription risk.
+
+```
+Fetches the configured bandwidth allocations (Mbps) per SPN region from
+/sse/config/v1/bandwidth-allocations and cross-references them against the
+remote networks (branches) connected to each SPN via /sse/config/v1/remote-networks.
+
+Reports per-branch bandwidth share and flags regions where the allocation pool
+is too small for the number of branches — the primary leading indicator for
+bandwidth oversubscription before users notice.
+
+Risk thresholds (configurable):
+    HIGH        — per-branch share < risk_threshold_low Mbps (default 5)
+    MEDIUM      — per-branch share < risk_threshold_med Mbps (default 10)
+    LOW         — per-branch share >= risk_threshold_med Mbps
+    UNALLOCATED — SPN has branches but no bandwidth-allocation entry
+
+Note: reports *configured* allocation, not live throughput. Real-time
+utilisation requires Prisma Access Insights API (pa-insights OAuth scope).
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active tenant.
+    all_tenants: If True, report across all configured MSSP tenants.
+    risk_threshold_low: Per-branch Mbps below which risk is HIGH (default 5).
+    risk_threshold_med: Per-branch Mbps below which risk is MEDIUM (default 10).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `all_tenants` | `bool` | `False` |
+| `risk_threshold_low` | `int` | `5` |
+| `risk_threshold_med` | `int` | `10` |
+
+---
+
+### `scm_gp_session_summary`
+
+Live GlobalProtect and Prisma Access Agent session summary.
+
+```
+Queries the Prisma Access Insights API for current connected mobile-user
+session counts and breaks them down by:
+  - Country of origin (client-side GeoIP)
+  - Compute node / PA edge location
+  - Client type: GlobalProtect vs Prisma Access Agent
+  - GP client version distribution
+
+Compares the live connected count against the licensed MU seat count and
+shows utilisation as a percentage.
+
+Privacy: Only aggregate counts are returned — no usernames, IP addresses,
+or device identifiers appear in the output.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active session.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+---
+
+## Utility
+
+_Server maintenance and development tools._
+
+### `scm_check_updates`
+
+Check whether pan-scm-sdk, prisma-sase, MCP, and scm-mcp-mssp are up to date.
+
+```
+Queries PyPI for the latest version of each package and compares it to the
+installed version.  Also fetches the latest release notes from the
+pan-scm-sdk GitHub repo and the most recent commit log for the SASE API
+docs path in pan.dev.
+
+No arguments required — tenant_id is ignored (the check is network-only).
+
+Returns:
+    Markdown table of installed vs latest versions with 🟢/🟡/⚪ status,
+    latest pan-scm-sdk GitHub release notes, and recent pan.dev SASE API
+    commit log.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+
+### `scm_restart`
+
+Restart the MCP server process.
+
+```
+Schedules a clean exit after returning this response.  Claude Desktop
+and most MCP supervisors detect the exit and automatically reconnect /
+restart the server.  Use this when a hot-reload (scm_reload) is not
+enough — e.g. after adding a new dependency, changing server.py,
+editing config files, or installing an SDK update.
+
+For the HTTP transport (scm-mcp-http) the process must be managed by
+a supervisor (systemd, Docker restart policy) for automatic restart to
+occur; otherwise it simply exits and must be restarted manually.
+
+Args:
+    delay_seconds: Seconds to wait before sending SIGTERM (default 3,
+                   minimum 1).  The delay lets this response be
+                   delivered before the process terminates.
+
+Returns:
+    Confirmation that restart has been scheduled.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `delay_seconds` | `int` | `3` |
+
+### `scm_reload`
+
+Hot-reload scm_mcp_mssp source modules without restarting the MCP server.
+
+```
+Reloads all scm_mcp_mssp submodules in dependency order, then patches
+cross-module references so tool closures immediately see the updated code.
+
+Args:
+    modules: Optional list of short module names to reload (e.g.
+             ["asbuilt_report", "extractor"]).  If omitted, all modules
+             in the standard reload list are refreshed.
+
+Returns:
+    Summary of reloaded modules, patched references, and any errors.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `modules` | `list[str] \| None` | `None` |
+

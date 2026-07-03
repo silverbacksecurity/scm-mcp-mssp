@@ -1,0 +1,70 @@
+title: SCM MCP - Cross-Tenant Tool Access Attempt
+id: a1b2c3d4-0002-4e5f-8a9b-scmmcp000002
+status: production
+description: >
+  Detects attempts to access a tenant that is not loaded in the server's
+  client cache, which may indicate a misconfiguration or a deliberate attempt
+  to probe tenant IDs in MSSP multi-tenant mode.
+author: silverbacksec
+date: 2026-06-17
+
+logsource:
+  product: scm-mcp-mssp
+  service: scm-mcp
+
+detection:
+  selection:
+    event: tenant_not_found
+  condition: selection | count() by tenant_id > 3
+  timeframe: 5m
+
+falsepositives:
+  - Newly onboarded tenant not yet reloaded in server memory
+  - Typo in tenant_id passed by Claude/MCP client
+
+level: medium
+
+tags:
+  - attack.discovery
+  - attack.t1087  # Account Discovery
+
+fields:
+  - tenant_id
+  - timestamp
+
+---
+
+title: SCM MCP - Unusual Tool Volume per Tenant
+id: a1b2c3d4-0003-4e5f-8a9b-scmmcp000003
+status: experimental
+description: >
+  Detects an abnormally high number of SCM tool invocations for a single
+  tenant within a short window. May indicate automated bulk data exfiltration
+  via the MCP interface.
+author: silverbacksec
+date: 2026-06-17
+
+logsource:
+  product: scm-mcp-mssp
+  service: scm-mcp
+
+detection:
+  selection:
+    event: tool_called
+  condition: selection | count() by tenant_id > 200
+  timeframe: 1m
+
+falsepositives:
+  - Legitimate bulk compliance assessments (BPA, NCSC) — these call many tools
+  - Scripted onboarding
+
+level: medium
+
+tags:
+  - attack.exfiltration
+  - attack.t1530  # Data from Cloud Storage
+
+fields:
+  - tenant_id
+  - tool_name
+  - timestamp

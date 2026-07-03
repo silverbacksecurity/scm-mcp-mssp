@@ -1,0 +1,7 @@
+# GHSA-537c-gmf6-5ccf — Vulnerable OpenSSL bundled in cryptography wheels
+# Severity: HIGH (CVSS 7.5) | Published: 2026-06-15
+# Fix requires cryptography>=48.0.1, but pan-scm-sdk==0.15.0 pins cryptography<47.
+# Tracked: upgrade once pan-scm-sdk relaxes its cryptography constraint.
+# Risk acceptance: pan-scm-sdk uses cryptography only for OAuth2 token handling
+# over HTTPS; the TLS connection itself is handled by the OS/httpx stack.
+GHSA-537c-gmf6-5ccf

@@ -1,0 +1,2094 @@
+"""
+MCP tools for operational visibility and MSSP management.
+
+Tools:
+    scm_cert_scan            — scan all tenant certificates, flag expiring <N days
+    scm_licence_forecast     — licence expiry and seat utilisation per tenant
+    scm_tenant_dashboard     — multi-tenant health traffic-light overview (NOC wallboard)
+    scm_spn_bandwidth        — SPN bandwidth allocation, live throughput (Insights v3.0), and risk
+    scm_gp_session_summary   — live GP + PA-Agent session counts by country, compute node, and
+                               client version; compares against licensed MU seat capacity
+    scm_check_updates        — check PyPI + GitHub for SDK / pan.dev updates; no dependencies
+"""
+
+from __future__ import annotations
+
+import json as _json
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
+from datetime import UTC, datetime
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from ..auth.oauth import fetch_licenses, get_scm_client
+from ..config.settings import TenantConfig
+from ..utils.errors import handle_scm_exception
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+_SCM_BASE = "https://api.sase.paloaltonetworks.com/sse/config/v1"
+_INSIGHTS_BASE = "https://api.sase.paloaltonetworks.com/insights/v3.0/resource/query"
+_CERT_FOLDERS = ["Shared", "Remote Networks", "Mobile Users", "Service Connections"]
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _load_all_tenant_configs() -> dict[str, TenantConfig]:
+    """Load all MSSP tenant configs from settings.toml + .secrets.toml."""
+    try:
+        from dynaconf import Dynaconf  # type: ignore[import-untyped]
+
+        base = Dynaconf(envvar_prefix="SCM_MCP", settings_files=["settings.toml"], load_dotenv=True)
+        secrets = Dynaconf(
+            envvar_prefix="SCM_MCP", settings_files=[".secrets.toml"], load_dotenv=False
+        )
+        base_t: dict[str, Any] = dict(base.get("tenants") or {})
+        secret_t: dict[str, Any] = dict(secrets.get("tenants") or {})
+
+        out: dict[str, TenantConfig] = {}
+        for key in set(base_t) | set(secret_t):
+            merged = dict(base_t.get(key) or {})
+            merged.update(secret_t.get(key) or {})
+            try:
+                out[key] = TenantConfig(**merged)
+            except Exception as exc:
+                logger.warning("tenant_config_invalid", tenant=key, error=str(exc))
+        return out
+    except Exception as exc:
+        logger.warning("tenant_config_load_failed", error=str(exc))
+        return {}
+
+
+def _days_until_epoch(epoch_str: str) -> int | None:
+    try:
+        return (int(epoch_str) - int(time.time())) // 86400
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_expiry_str(exp: str) -> int | None:
+    """Parse 'YYYY-MM-DDTHH:MM:SS' or 'YYYY-MM-DD HH:MM:SS' to days remaining."""
+    if not exp or exp in ("None", ""):
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(exp.split(".")[0], fmt).replace(tzinfo=UTC)
+            return (dt - datetime.now(UTC)).days
+        except ValueError:
+            continue
+    return None
+
+
+def _status(days: int | None, warn: int = 90) -> str:
+    if days is None:
+        return "UNKNOWN"
+    if days < 0:
+        return "EXPIRED"
+    if days < 30:
+        return "CRITICAL"
+    if days < 60:
+        return "WARNING"
+    if days < warn:
+        return "CAUTION"
+    return "OK"
+
+
+_STATUS_EMOJI = {
+    "EXPIRED": "🔴",
+    "CRITICAL": "🔴",
+    "WARNING": "🟡",
+    "CAUTION": "🟡",
+    "OK": "🟢",
+    "UNKNOWN": "⚪",
+}
+
+
+def _nearest_licence_expiry(
+    lics: list[dict], include_expired: bool = False
+) -> tuple[int | None, str]:
+    """Return (days_remaining, 'YYYY-MM-DD') for the most relevant licence expiry.
+
+    Each entry in *lics* is a subscription bundle with a ``licenses`` list, each
+    carrying a ``license_expiration`` timestamp.
+
+    By default the result tracks the soonest expiry among *active* (not-yet-
+    expired) SKUs, so the figure reflects operational renewal health rather than
+    a long-dead trial/legacy SKU (e.g. an old logging_service Production License)
+    dragging "days" permanently negative. If a tenant has no active licences
+    left, it falls back to the worst (most-expired) SKU so the row still flags
+    red. Set ``include_expired=True`` to consider every SKU, expired or not.
+
+    Returns ``(None, "—")`` when no parseable expiry dates are present.
+    """
+    active_days: int | None = None
+    active_exp = "—"
+    worst_days: int | None = None
+    worst_exp = "—"
+    for bundle in lics:
+        for sub in bundle.get("licenses", []):
+            exp_raw = str(sub.get("license_expiration", ""))
+            d = _parse_expiry_str(exp_raw)
+            if d is None:
+                continue
+            if worst_days is None or d < worst_days:
+                worst_days, worst_exp = d, exp_raw[:10]
+            if d >= 0 and (active_days is None or d < active_days):
+                active_days, active_exp = d, exp_raw[:10]
+
+    if include_expired or active_days is None:
+        return worst_days, worst_exp
+    return active_days, active_exp
+
+
+def _fetch_certs(session: Any, folder: str) -> list[dict]:
+    try:
+        r = session.get(
+            f"{_SCM_BASE}/certificates",
+            params={"folder": folder, "limit": 500},
+            timeout=(5, 20),
+        )
+        if r.status_code == 200:
+            d = r.json()
+            return d if isinstance(d, list) else d.get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+def _quick_list(session: Any, path: str, params: dict) -> list[dict]:
+    try:
+        r = session.get(
+            f"{_SCM_BASE}/{path}",
+            params={**params, "limit": 500},
+            timeout=(4, 12),
+        )
+        if r.status_code == 200:
+            d = r.json()
+            return d if isinstance(d, list) else d.get("data", [])
+    except Exception:
+        pass
+    return []
+
+
+def _gather_parallel(
+    targets: list[tuple[str, Any]],
+    fn: Any,
+    timeout: int = 25,
+    max_workers: int = 8,
+) -> list[tuple[str, bool, Any]]:
+    """Run ``fn(label, client)`` for every target in parallel under a hard
+    wall-clock budget.
+
+    Multi-tenant reports otherwise loop tenants serially; a single unhealthy
+    tenant (e.g. an endpoint returning 5xx that the SDK session retries with
+    backoff) can stall the whole report past the MCP request deadline. Running
+    the per-tenant work in a bounded thread pool caps total wall time to roughly
+    ``timeout`` seconds and lets laggards degrade gracefully.
+
+    Returns a list aligned to *targets* order. Each entry is
+    ``(label, ok, payload)``:
+      * ``ok=True``  → fn returned normally; ``payload`` is its return value.
+      * ``ok=False`` → fn raised (``payload`` = exception) or timed out
+        (``payload`` = None).
+    """
+    out: list[tuple[str, bool, Any]] = [(lbl, False, None) for (lbl, _c) in targets]
+    if not targets:
+        return out
+    pool = ThreadPoolExecutor(max_workers=min(max_workers, len(targets)))
+    try:
+        fut_to_idx = {pool.submit(fn, lbl, cl): i for i, (lbl, cl) in enumerate(targets)}
+        done, _not_done = wait(fut_to_idx.keys(), timeout=timeout, return_when=ALL_COMPLETED)
+        for fut in done:
+            i = fut_to_idx[fut]
+            lbl = targets[i][0]
+            try:
+                out[i] = (lbl, True, fut.result())
+            except Exception as exc:  # noqa: BLE001 — degrade, don't abort the report
+                out[i] = (lbl, False, exc)
+        for fut in _not_done:
+            fut.cancel()  # best-effort; leaves entry as (label, False, None)
+    finally:
+        pool.shutdown(wait=False)
+    return out
+
+
+def _insights_query(
+    session: Any,
+    resource: str,
+    tenant_id: str,
+    body: dict | None = None,
+) -> list[dict]:
+    """POST to Insights v3.0 query API; returns data list or [] on any error."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-PANW-Region": "eu",
+        "Prisma-Tenant": str(tenant_id),
+    }
+    try:
+        r = session.post(
+            f"{_INSIGHTS_BASE}/{resource}",
+            json=body or {},
+            headers=headers,
+            timeout=(5, 20),
+        )
+        if r.status_code == 200:
+            d = r.json()
+            return d.get("data", []) if isinstance(d, dict) else (d if isinstance(d, list) else [])
+    except Exception:
+        pass
+    return []
+
+
+# Insights v3.0 candidate resource names for per-SPN bandwidth, tried in order.
+_SPN_BW_RESOURCES = ("pa_bandwidth_consumption", "sn_bandwidth", "edge_bandwidth")
+# 5-minute rolling window for throughput calculation.
+_SPN_BW_WINDOW_SEC = 300
+
+
+def _insights_spn_throughput(session: Any, tenant_id: str) -> dict[str, dict[str, float]]:
+    """Query Insights v3.0 for per-SPN throughput over the last 5 minutes.
+
+    Tries multiple resource names in order; returns the first non-empty result.
+    Converts raw byte counters to Mbps using the 5-minute window.
+
+    Returns:
+        {spn_name: {"mbps_in": float, "mbps_out": float}} or {} on any failure.
+    """
+    body: dict[str, Any] = {
+        "properties": [
+            {"property": "spn_name"},
+            {"property": "bytes_in"},
+            {"property": "bytes_out"},
+        ],
+        "filter": {
+            "rules": [
+                {
+                    "property": "event_time",
+                    "operator": "last_n_minutes",
+                    "values": ["5"],
+                }
+            ]
+        },
+    }
+    for resource in _SPN_BW_RESOURCES:
+        rows = _insights_query(session, resource, tenant_id, body=body)
+        if not rows:
+            continue
+
+        sample = rows[0]
+        spn_key = next(
+            (k for k in ("spn_name", "sn_name", "edge_location", "location") if k in sample),
+            None,
+        )
+        in_key = next((k for k in ("bytes_in", "rx_bytes", "inbound_bytes") if k in sample), None)
+        out_key = next(
+            (k for k in ("bytes_out", "tx_bytes", "outbound_bytes") if k in sample), None
+        )
+        if not spn_key:
+            continue
+
+        result: dict[str, dict[str, float]] = {}
+        for row in rows:
+            spn = str(row.get(spn_key) or "unknown")
+            bytes_in = int(row.get(in_key) or 0) if in_key else 0
+            bytes_out = int(row.get(out_key) or 0) if out_key else 0
+            result[spn] = {
+                "mbps_in": round(bytes_in * 8 / (_SPN_BW_WINDOW_SEC * 1_000_000), 2),
+                "mbps_out": round(bytes_out * 8 / (_SPN_BW_WINDOW_SEC * 1_000_000), 2),
+            }
+        if result:
+            logger.info(
+                "spn_throughput_fetched",
+                resource=resource,
+                tenant_id=tenant_id,
+                spn_count=len(result),
+            )
+            return result
+
+    return {}
+
+
+# ── Update-check helpers ──────────────────────────────────────────────────────
+
+_UA = "scm-mcp-mssp/updatecheck (github.com/silverbacksecurity/scm-mcp-mssp)"
+_PYPI_PACKAGES = [
+    ("pan-scm-sdk", "pan-scm-sdk"),
+    ("prisma-sase", "prisma-sase"),
+    ("mcp", "mcp"),
+    ("scm-mcp-mssp", "scm-mcp-mssp"),
+]
+
+
+def _http_get_json(url: str, timeout: int = 8) -> Any:
+    """GET url, return parsed JSON or None on any error."""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": _UA, "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  # nosec B310: fixed https URL
+            return _json.loads(resp.read())
+    except Exception:
+        return None
+
+
+def _pypi_latest(package: str) -> str | None:
+    data = _http_get_json(f"https://pypi.org/pypi/{package}/json")
+    return data["info"]["version"] if data else None
+
+
+def _installed_version(dist_name: str) -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(dist_name)
+    except PackageNotFoundError:
+        return "—"
+
+
+def _parse_semver(v: str) -> tuple[int, ...]:
+    """Return (major, minor, patch) for rough comparison; ignore pre-releases."""
+    try:
+        return tuple(int(x) for x in v.split(".")[:3])
+    except Exception:
+        return (0, 0, 0)
+
+
+def _gh_latest_release(owner: str, repo: str) -> dict[str, Any] | None:
+    return _http_get_json(f"https://api.github.com/repos/{owner}/{repo}/releases/latest")
+
+
+def _gh_recent_commits(owner: str, repo: str, path: str, n: int = 5) -> list[dict]:
+    data = _http_get_json(
+        f"https://api.github.com/repos/{owner}/{repo}/commits?path={path}&per_page={n}"
+    )
+    return data if isinstance(data, list) else []
+
+
+# ── Tool registration ─────────────────────────────────────────────────────────
+
+
+def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
+    """Register operational visibility and MSSP dashboard tools."""
+
+    @mcp.tool()
+    def scm_cert_scan(
+        folder: str = "Shared",
+        tenant_id: str = "",
+        warn_days: int = 90,
+        all_folders: bool = True,
+    ) -> str:
+        """Scan all SCM certificate objects and flag anything expiring soon.
+
+        Fetches certificates from the SCM config store via the certificates
+        REST API and checks each against today's date. Covers CA certificates,
+        SSL/TLS inspection certs, IKE certs, and SAML signing certificates
+        stored as SCM objects.
+
+        Also lists any IKE gateways configured to use certificate
+        authentication (rather than pre-shared keys), so the operator can
+        cross-reference gateway names against the certificate table above.
+
+        Args:
+            folder: Primary SCM folder to scan (default: Shared).
+            tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active
+                       single-tenant client.
+            warn_days: Highlight certs expiring within this many days
+                       (default 90). CRITICAL threshold is always 30 days,
+                       WARNING is always 60 days.
+            all_folders: Also scan Remote Networks, Mobile Users, Service
+                         Connections folders (default: True).
+
+        Returns:
+            Markdown report: status summary, full cert table sorted by expiry,
+            and IKE gateway cert-auth cross-reference.
+        """
+        try:
+            client = get_client(tenant_id)
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        session = getattr(client, "session", None)
+        if session is None:
+            return "Error: no HTTP session available on SCM client."
+
+        # Collect certs from all relevant folders, deduplicate by cert ID
+        scan_folders = [folder] + ([f for f in _CERT_FOLDERS if f != folder] if all_folders else [])
+        seen: set[str] = set()
+        certs: list[dict] = []
+        for f in scan_folders:
+            for c in _fetch_certs(session, f):
+                cid = str(c.get("id", c.get("name", "")))
+                if cid not in seen:
+                    seen.add(cid)
+                    certs.append(c)
+
+        if not certs:
+            return (
+                f"No certificate objects found in folders: {', '.join(scan_folders)}.\n"
+                "If this tenant uses only pre-shared key IKE authentication the cert "
+                "store may be empty — that is normal."
+            )
+
+        # Enrich each cert with computed fields
+        rows: list[dict] = []
+        for c in certs:
+            days = _days_until_epoch(c.get("expiry_epoch", ""))
+            # Shorten issuer DN to just the CN= component
+            issuer_dn = c.get("issuer", "")
+            issuer_cn = next(
+                (p[3:] for p in issuer_dn.split("/") if p.startswith("CN=")),
+                issuer_dn[:50],
+            )
+            rows.append(
+                {
+                    "name": c.get("name", "?"),
+                    "cn": c.get("common_name", c.get("name", "?")),
+                    "type": "CA" if c.get("ca") else "Leaf",
+                    "issuer_cn": issuer_cn,
+                    "expires": c.get("not_valid_after", "?"),
+                    "days": days,
+                    "status": _status(days, warn_days),
+                    "location": c.get("snippet") or c.get("folder") or "?",
+                }
+            )
+
+        rows.sort(key=lambda r: r["days"] if r["days"] is not None else 99_999)
+
+        # Status counts
+        counts: dict[str, int] = {}
+        for r in rows:
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
+
+        flagged = sum(counts.get(s, 0) for s in ("EXPIRED", "CRITICAL", "WARNING", "CAUTION"))
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+        lines: list[str] = [
+            "## Certificate Expiry Scan",
+            "",
+            f"**Certificates scanned:** {len(certs)}  "
+            f"| **Flagged (≤ {warn_days} days):** {flagged}  "
+            f"| **Generated:** {ts}",
+            "",
+        ]
+
+        # Inline status badges
+        badges = [
+            f"{_STATUS_EMOJI[s]} {s}: {counts[s]}"
+            for s in ("EXPIRED", "CRITICAL", "WARNING", "CAUTION", "OK")
+            if s in counts
+        ]
+        lines.append("  ".join(badges))
+        lines.append("")
+
+        # Certificate table
+        lines += [
+            "| Certificate | Type | Common Name | Issuer CN | Expires (GMT) | Days | Status | Location |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for r in rows:
+            emoji = _STATUS_EMOJI.get(r["status"], "")
+            days_s = str(r["days"]) if r["days"] is not None else "?"
+            lines.append(
+                f"| `{r['name']}` | {r['type']} | {r['cn']} | {r['issuer_cn']} "
+                f"| {r['expires']} | {days_s} | {emoji} {r['status']} | {r['location']} |"
+            )
+
+        # IKE gateways using cert auth — quick REST pull, no full snapshot needed
+        gw_data = _quick_list(session, "ike-gateways", {"folder": "Remote Networks"})
+        cert_gws = [
+            gw for gw in gw_data if (gw.get("authentication") or {}).get("certificate") is not None
+        ]
+        if cert_gws:
+            lines += [
+                "",
+                "### IKE Gateways Using Certificate Authentication",
+                "",
+                "| Gateway | Local Certificate | Version | Peer |",
+                "|---|---|---|---|",
+            ]
+            for gw in cert_gws:
+                cert_ref = gw.get("authentication", {}).get("certificate") or {}
+                local_cert = (
+                    (cert_ref.get("local_certificate") or {}).get("name", "?")
+                    if isinstance(cert_ref, dict)
+                    else "?"
+                )
+                version = (gw.get("protocol") or {}).get("version", "?")
+                peer = (
+                    (gw.get("peer_address") or {}).get("ip")
+                    or (gw.get("peer_address") or {}).get("fqdn")
+                    or "dynamic"
+                )
+                lines.append(f"| `{gw['name']}` | `{local_cert}` | {version} | {peer} |")
+        else:
+            lines += [
+                "",
+                "> All IKE gateways use pre-shared key authentication "
+                "— no cert-auth gateways found.",
+            ]
+
+        return "\n".join(lines)
+
+    @mcp.tool()
+    def scm_cert_lifecycle(
+        tenant_id: str = "",
+        warn_days: int = 90,
+        all_tenants: bool = False,
+    ) -> str:
+        """Multi-tenant TLS certificate lifecycle dashboard.
+
+        Sweeps all SCM certificate objects across one or all MSSP tenants.
+        Identifies SSL inspection CA certificates — these are the most critical
+        to monitor because expiry silently disables SSL decryption with no
+        user-visible error. Produces per-tenant expiry detail and a cross-tenant
+        summary table for the MSSP morning brief.
+
+        SSL Inspection CA detection: any CA-type certificate (ca=true) whose
+        name or CN contains 'ssl', 'inspect', 'decrypt', 'forward-proxy',
+        or 'intercept' is flagged as a probable SSL inspection CA.
+
+        Args:
+            tenant_id: SCM tenant ID. Leave empty for the active tenant.
+            warn_days: Days threshold for CAUTION status (default 90).
+            all_tenants: If True (MSSP mode), sweep all configured MSSP tenants.
+        """
+        try:
+            targets: list[tuple[str, Any]] = []
+            if all_tenants:
+                for key, tc in _load_all_tenant_configs().items():
+                    try:
+                        targets.append((tc.label or key, get_scm_client(tc)))
+                    except Exception as exc:
+                        logger.warning("cert_lifecycle_auth_failed", tenant=key, error=str(exc))
+                        targets.append((tc.label or key, None))
+            else:
+                client = get_client(tenant_id)
+                targets = [(tenant_id or "active tenant", client)]
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        _SSL_INSPECT_KEYWORDS = frozenset(
+            {"ssl", "inspect", "decrypt", "forward-proxy", "intercept", "tls-ca"}
+        )
+
+        def _is_ssl_inspect_ca(cert: dict[str, Any]) -> bool:
+            if not cert.get("ca"):
+                return False
+            name_lower = (cert.get("name", "") + " " + cert.get("common_name", "")).lower()
+            return any(kw in name_lower for kw in _SSL_INSPECT_KEYWORDS)
+
+        # Summary table data: (label, total, critical+expired, ssl_ca_critical, worst_days)
+        summary_rows: list[dict[str, Any]] = []
+        detail_sections: list[str] = []
+        multi = len(targets) > 1
+
+        def _section(label: str, client: Any) -> tuple[dict[str, Any] | None, str]:
+            if client is None:
+                return (
+                    {
+                        "label": label,
+                        "total": 0,
+                        "flagged": 0,
+                        "ssl_ca_critical": 0,
+                        "worst": None,
+                        "status": "ERR",
+                    },
+                    f"### {label}\n\n> ⚠️ Authentication failed — skipped.\n",
+                )
+
+            session = getattr(client, "session", None)
+            if session is None:
+                return (None, f"### {label}\n\n> No HTTP session available.\n")
+
+            # Collect certs across all standard folders
+            seen: set[str] = set()
+            certs: list[dict[str, Any]] = []
+            for folder in _CERT_FOLDERS:
+                for c in _fetch_certs(session, folder):
+                    cid = str(c.get("id", c.get("name", "")))
+                    if cid not in seen:
+                        seen.add(cid)
+                        certs.append(c)
+
+            if not certs:
+                return (
+                    {
+                        "label": label,
+                        "total": 0,
+                        "flagged": 0,
+                        "ssl_ca_critical": 0,
+                        "worst": None,
+                        "status": "OK",
+                    },
+                    f"### {label}\n\n> No certificate objects found. "
+                    "Tenant may use only pre-shared key authentication.\n",
+                )
+
+            rows: list[dict[str, Any]] = []
+            for c in certs:
+                days = _days_until_epoch(c.get("expiry_epoch", ""))
+                issuer_dn = c.get("issuer", "")
+                issuer_cn = next(
+                    (p[3:] for p in issuer_dn.split("/") if p.startswith("CN=")),
+                    issuer_dn[:40],
+                )
+                rows.append(
+                    {
+                        "name": c.get("name", "?"),
+                        "cn": c.get("common_name", c.get("name", "?"))[:30],
+                        "type": "CA" if c.get("ca") else "Leaf",
+                        "ssl_ca": _is_ssl_inspect_ca(c),
+                        "issuer_cn": issuer_cn[:30],
+                        "expires": c.get("not_valid_after", "?"),
+                        "days": days,
+                        "status": _status(days, warn_days),
+                        "location": c.get("snippet") or c.get("folder") or "?",
+                    }
+                )
+
+            rows.sort(key=lambda r: r["days"] if r["days"] is not None else 99_999)
+            flagged = [
+                r for r in rows if r["status"] in ("EXPIRED", "CRITICAL", "WARNING", "CAUTION")
+            ]
+            ssl_ca_critical = [
+                r for r in rows if r["ssl_ca"] and r["status"] in ("EXPIRED", "CRITICAL")
+            ]
+            worst_days = rows[0]["days"] if rows else None
+            worst_status = rows[0]["status"] if rows else "OK"
+
+            summary_row = {
+                "label": label,
+                "total": len(certs),
+                "flagged": len(flagged),
+                "ssl_ca_critical": len(ssl_ca_critical),
+                "worst": worst_days,
+                "status": worst_status,
+            }
+
+            sec: list[str] = []
+            if multi:
+                sec.append(f"### {label}")
+                sec.append("")
+
+            if ssl_ca_critical:
+                sec.append(
+                    "🔴 **CRITICAL: SSL Inspection CA certificate(s) expiring — SSL decryption will silently stop!**"
+                )
+                sec.append("")
+
+            counts: dict[str, int] = {}
+            for r in rows:
+                counts[r["status"]] = counts.get(r["status"], 0) + 1
+            badges = [
+                f"{_STATUS_EMOJI[s]} {s}: {counts[s]}"
+                for s in ("EXPIRED", "CRITICAL", "WARNING", "CAUTION", "OK")
+                if s in counts
+            ]
+            sec.append("  ".join(badges))
+            sec.append("")
+            sec += [
+                "| Certificate | Type | SSL-Inspect CA | Expires | Days | Status | Location |",
+                "|---|---|---|---|---|---|---|",
+            ]
+            for r in rows:
+                emoji = _STATUS_EMOJI.get(r["status"], "")
+                days_s = str(r["days"]) if r["days"] is not None else "?"
+                ssl_flag = "🔑 YES" if r["ssl_ca"] else "—"
+                sec.append(
+                    f"| `{r['name']}` | {r['type']} | {ssl_flag} "
+                    f"| {r['expires']} | {days_s} | {emoji} {r['status']} | {r['location']} |"
+                )
+            sec.append("")
+            return (summary_row, "\n".join(sec))
+
+        for label, ok, payload in _gather_parallel(targets, _section):
+            if not ok or payload is None:
+                detail_sections.append(f"### {label}\n\n> ⏱ Slow/skipped — exceeded poll budget.\n")
+                summary_rows.append(
+                    {
+                        "label": label,
+                        "total": 0,
+                        "flagged": 0,
+                        "ssl_ca_critical": 0,
+                        "worst": None,
+                        "status": "ERR",
+                    }
+                )
+                continue
+            summary_row, detail = payload
+            if summary_row is not None:
+                summary_rows.append(summary_row)
+            detail_sections.append(detail)
+
+        lines: list[str] = [
+            "## Certificate Lifecycle Dashboard",
+            "",
+            f"**Generated:** {ts}  |  **Warn threshold:** {warn_days} days",
+            "",
+        ]
+
+        # Cross-tenant summary table (only when multiple tenants)
+        if len(targets) > 1 and summary_rows:
+            lines += [
+                "### Cross-Tenant Summary",
+                "",
+                "| Tenant | Certs | Flagged | SSL-CA Critical | Worst Expiry (days) | Status |",
+                "|---|---|---|---|---|---|",
+            ]
+            for s in summary_rows:
+                emoji = _STATUS_EMOJI.get(s["status"], "⚪")
+                worst = str(s["worst"]) if s["worst"] is not None else "—"
+                lines.append(
+                    f"| {s['label']} | {s['total']} | {s['flagged']} "
+                    f"| {s['ssl_ca_critical']} | {worst} | {emoji} {s['status']} |"
+                )
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        lines.extend(detail_sections)
+        lines += [
+            "---",
+            "",
+            "**SSL Inspection CA** — a CA-type cert whose name/CN suggests use as an SSL "
+            "Forward Proxy CA. If this expires, decryption silently stops with no alert.",
+            "Run `scm_cert_import` to upload replacement certs or `scm_tls_profile_manager` "
+            "to review TLS inspection profiles.",
+        ]
+        return "\n".join(lines)
+
+    @mcp.tool()
+    def scm_cert_import(
+        name: str,
+        pem: str,
+        folder: str = "Shared",
+        is_ca: bool = False,
+        tenant_id: str = "",
+    ) -> str:
+        """Import a PEM certificate into an SCM tenant folder.
+
+        Uploads a certificate object to the SCM config store. Use this to
+        deploy a new SSL inspection CA, replace an expiring cert, or add
+        a trusted root CA. Does not import private keys — use the SCM UI
+        for PKCS12 imports that include private keys.
+
+        After import, run scm_commit to activate the new certificate.
+
+        Args:
+            name: Certificate object name in SCM (e.g. "SSL-Inspect-CA-2026").
+            pem: PEM-encoded certificate text (the full -----BEGIN CERTIFICATE----- block).
+            folder: SCM folder to import into (default: Shared).
+            is_ca: Mark this certificate as a CA certificate (default False).
+            tenant_id: SCM tenant ID. Defaults to the configured default tenant.
+        """
+        try:
+            client = get_client(tenant_id)
+
+            payload: dict[str, Any] = {
+                "name": name,
+                "folder": folder,
+                "certificate": pem.strip(),
+                "ca": is_ca,
+            }
+
+            result = client.post(
+                "/config/v1/certificates",
+                json=payload,
+            )
+
+            logger.info(
+                "cert_imported",
+                name=name,
+                folder=folder,
+                is_ca=is_ca,
+                tenant_id=tenant_id,
+            )
+
+            if result is None:
+                return (
+                    f"✅ Certificate `{name}` imported into folder `{folder}` "
+                    f"({'CA' if is_ca else 'leaf'} type). Run `scm_commit` to activate."
+                )
+
+            import json as _json
+
+            return (
+                "✅ Certificate imported successfully.\n\n"
+                + _json.dumps(
+                    result if isinstance(result, dict) else {"result": str(result)},
+                    indent=2,
+                    default=str,
+                )
+                + f"\n\nRun `scm_commit(folders=['{folder}'])` to activate."
+            )
+
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_cert_import', name=name, folder=folder, tenant_id=tenant_id)}"
+
+    @mcp.tool()
+    def scm_tls_profile_manager(
+        action: str = "list",
+        name: str = "",
+        min_version: str = "tls1-2",
+        max_version: str = "tls1-3",
+        cert_profile: str = "",
+        folder: str = "Shared",
+        tenant_id: str = "",
+    ) -> str:
+        """List or create TLS service profiles for SSL inspection configuration.
+
+        TLS service profiles define which TLS versions and cipher suites are
+        permitted in SSL Forward Proxy inspection. They are referenced by
+        decryption profiles, which are in turn applied by decryption rules.
+
+        action='list'   — list all TLS service profiles for this tenant
+        action='create' — create a new profile (requires name parameter)
+
+        Created profiles default to TLS 1.2 minimum, TLS 1.3 maximum —
+        the NCSC/CE-recommended baseline that blocks legacy TLS.
+
+        Args:
+            action: 'list' or 'create'.
+            name: Profile name (required for create).
+            min_version: Minimum TLS version ('tls1-2' or 'tls1-3'). Default: 'tls1-2'.
+            max_version: Maximum TLS version ('tls1-2' or 'tls1-3'). Default: 'tls1-3'.
+            cert_profile: Optional certificate profile name for client cert validation.
+            folder: SCM folder (default: Shared).
+            tenant_id: SCM tenant ID. Defaults to the configured default tenant.
+        """
+        import json as _json
+
+        try:
+            client = get_client(tenant_id)
+
+            if action == "list":
+                result = client.get(
+                    "/config/v1/tls-service-profiles",
+                    params={"folder": folder, "limit": 200},
+                )
+                profiles: list[dict[str, Any]] = []
+                if isinstance(result, dict):
+                    profiles = result.get("data", [])
+                elif isinstance(result, list):
+                    profiles = result
+
+                if not profiles:
+                    return (
+                        f"No TLS service profiles found in folder `{folder}`.\n\n"
+                        "Create one with `scm_tls_profile_manager(action='create', name='...')`."
+                    )
+
+                lines = [
+                    f"## TLS Service Profiles — {folder} ({tenant_id or 'default tenant'})",
+                    "",
+                    f"Total: {len(profiles)}",
+                    "",
+                    "| Name | Min TLS | Max TLS | Cert Profile | Auth |",
+                    "|---|---|---|---|---|",
+                ]
+                for p in profiles:
+                    pname = p.get("name", "?")
+                    proto = p.get("protocol_settings") or p.get("protocol") or {}
+                    if isinstance(proto, dict):
+                        min_v = proto.get("min_version", proto.get("min-version", "—"))
+                        max_v = proto.get("max_version", proto.get("max-version", "—"))
+                    else:
+                        min_v = max_v = "—"
+                    cp = p.get("certificate_profile", "—")
+                    auth = p.get("client_authentication", [])
+                    auth_s = (
+                        ", ".join(a.get("name", str(a)) for a in auth)
+                        if isinstance(auth, list)
+                        else str(auth)
+                    )
+                    lines.append(f"| `{pname}` | {min_v} | {max_v} | {cp} | {auth_s or '—'} |")
+                return "\n".join(lines)
+
+            elif action == "create":
+                if not name:
+                    return "Error: `name` is required when action='create'."
+
+                payload: dict[str, Any] = {
+                    "name": name,
+                    "folder": folder,
+                    "protocol_settings": {
+                        "min_version": min_version,
+                        "max_version": max_version,
+                        "auth_algo_sha1": False,
+                        "auth_algo_sha256": True,
+                        "auth_algo_sha384": True,
+                        "enc_algo_3des": False,
+                        "enc_algo_rc4": False,
+                        "enc_algo_aes_128_cbc": False,
+                        "enc_algo_aes_256_cbc": True,
+                        "enc_algo_aes_128_gcm": True,
+                        "enc_algo_aes_256_gcm": True,
+                    },
+                }
+                if cert_profile:
+                    payload["certificate_profile"] = cert_profile
+
+                result = client.post("/config/v1/tls-service-profiles", json=payload)
+                logger.info(
+                    "tls_profile_created",
+                    name=name,
+                    folder=folder,
+                    min_version=min_version,
+                    max_version=max_version,
+                    tenant_id=tenant_id,
+                )
+
+                detail = (
+                    _json.dumps(
+                        result if isinstance(result, dict) else {"result": str(result)},
+                        indent=2,
+                        default=str,
+                    )
+                    if result
+                    else ""
+                )
+
+                return (
+                    f"✅ TLS service profile `{name}` created in folder `{folder}`.\n\n"
+                    f"Settings: TLS {min_version} — {max_version}, strong ciphers only "
+                    "(AES-256-GCM, AES-128-GCM, SHA-256/384; no 3DES, RC4, SHA-1).\n"
+                    + (f"\n```json\n{detail}\n```\n" if detail else "")
+                    + f"\nRun `scm_commit(folders=['{folder}'])` to activate."
+                )
+            else:
+                return f"Error: unknown action '{action}'. Use 'list' or 'create'."
+
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_tls_profile_manager', action=action, tenant_id=tenant_id)}"
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def scm_licence_forecast(
+        tenant_id: str = "",
+        warn_days: int = 90,
+        all_tenants: bool = False,
+    ) -> str:
+        """Forecast licence expiry dates and seat utilisation.
+
+        Pulls subscription licence data from the PAN Subscription Service API
+        and groups entries by product (app_id), reporting the earliest expiry
+        per product and seat consumption. Useful for proactive renewals and
+        to catch oversubscribed licence pools before users are impacted.
+
+        Seat utilisation is calculated as:
+            consumed = purchased_size − remaining_size
+            % used   = consumed / purchased_size × 100
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active
+                       single-tenant client.
+            warn_days: Flag licences expiring within this many days (default 90).
+                       CRITICAL is always <30 days, WARNING is always <60 days.
+            all_tenants: If True (MSSP mode), scan every configured tenant and
+                         produce a combined forecast. Overrides tenant_id.
+
+        Returns:
+            Markdown table(s) with expiry status, days remaining, and
+            seat utilisation per product per tenant.
+        """
+        try:
+            targets: list[tuple[str, Any]] = []
+            if all_tenants:
+                for key, tc in _load_all_tenant_configs().items():
+                    try:
+                        targets.append((tc.label, get_scm_client(tc)))
+                    except Exception as exc:
+                        logger.warning("lic_forecast_auth_failed", tenant=key, error=str(exc))
+                        targets.append((tc.label, None))
+            else:
+                client = get_client(tenant_id)
+                targets = [(tenant_id or "active tenant", client)]
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        lines: list[str] = [
+            "## Licence Expiry Forecast",
+            "",
+            f"**Generated:** {ts}  | **Warn threshold:** {warn_days} days",
+            "",
+        ]
+
+        multi = len(targets) > 1
+
+        def _section(label: str, client: Any) -> tuple[list[str], bool]:
+            out: list[str] = []
+            if client is None:
+                out += [f"### {label}", "", "> ⚠️ Authentication failed — skipped.", ""]
+                return out, True
+
+            lics = fetch_licenses(client)
+            if not lics:
+                out += [f"### {label}", "", "> No licence data returned.", ""]
+                return out, True
+
+            section_ok = True
+            # Aggregate: (app_id, expiry_str) → totals
+            groups: dict[tuple[str, str], dict[str, Any]] = {}
+            for bundle in lics:
+                app = bundle.get("app_id", "unknown")
+                for sub in bundle.get("licenses", []):
+                    exp = str(sub.get("license_expiration", ""))
+                    key: tuple[str, str] = (app, exp)
+                    if key not in groups:
+                        groups[key] = {
+                            "app": app,
+                            "exp": exp,
+                            "lic_type": sub.get("license_type", ""),
+                            "purchased": 0,
+                            "remaining": 0,
+                        }
+                    groups[key]["purchased"] += int(sub.get("purchased_size", 0) or 0)
+                    groups[key]["remaining"] += int(sub.get("remaining_size", 0) or 0)
+
+            rows = sorted(
+                groups.values(),
+                key=lambda x: _parse_expiry_str(x["exp"]) or 99_999,
+            )
+
+            if multi:
+                out.append(f"### {label}")
+                out.append("")
+
+            out += [
+                "| Product | Expires | Days | Allocated | Consumed | % Used | Status |",
+                "|---|---|---|---|---|---|---|",
+            ]
+            for row in rows:
+                days = _parse_expiry_str(row["exp"])
+                st = _status(days, warn_days)
+                if st != "OK":
+                    section_ok = False
+                emoji = _STATUS_EMOJI.get(st, "")
+                days_s = str(days) if days is not None else "?"
+                purchased = row["purchased"]
+                remaining = row["remaining"]
+                consumed = purchased - remaining
+                if purchased > 0:
+                    pct_val = consumed / purchased * 100
+                    pct = f"{pct_val:.0f}%"
+                    if consumed > purchased:
+                        pct = f"**{pct} ⚠️ oversubscribed**"
+                else:
+                    pct = "—"
+                out.append(
+                    f"| `{row['app']}` | {row['exp'][:19]} | {days_s} "
+                    f"| {purchased:,} | {consumed:,} | {pct} | {emoji} {st} |"
+                )
+            out.append("")
+            return out, section_ok
+
+        all_ok = True
+        for label, ok, payload in _gather_parallel(targets, _section):
+            if not ok or payload is None:
+                lines += [f"### {label}", "", "> ⏱ Slow/skipped — exceeded poll budget.", ""]
+                all_ok = False
+                continue
+            sec_lines, sec_ok = payload
+            lines += sec_lines
+            all_ok = all_ok and sec_ok
+
+        if all_ok and targets:
+            lines.insert(4, "> 🟢 All licences are within normal thresholds.\n")
+
+        return "\n".join(lines)
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def scm_tenant_dashboard(include_expired: bool = False) -> str:
+        """Multi-tenant NOC health dashboard — traffic-light overview of all tenants.
+
+        Performs a fast, lightweight data pull for every configured MSSP tenant
+        and returns a single Markdown table suitable for a NOC wallboard or
+        morning health check. No full snapshot extraction is run — only targeted
+        REST calls for rule counts, remote networks, IKE tunnels, and licences.
+
+        Columns:
+            Tenant        — tenant label from settings.toml
+            Rules         — security rule count (pre-rulebase, Shared folder)
+            RNs           — remote network (branch) count
+            Tunnels       — IKE gateway count
+            Nearest Expiry — soonest licence expiry date (see include_expired)
+            Days          — days until that expiry
+            Lic           — licence RAG status
+            Errors        — API call failures during this poll
+            RAG           — overall tenant health (🔴 / 🟡 / 🟢)
+
+        Args:
+            include_expired: When False (default), already-expired SKUs are
+                excluded from the nearest-expiry calculation so the RAG reflects
+                operational licence health — i.e. the soonest renewal among
+                *active* licences — rather than being dragged permanently
+                negative by a long-dead trial/legacy SKU (e.g. an old
+                logging_service Production License). A tenant whose licences are
+                *all* expired still falls back to its worst expired SKU and flags
+                red. Set True to compute the nearest expiry across every SKU.
+
+        Returns:
+            Markdown table with one row per tenant.
+        """
+        tenant_cfgs = _load_all_tenant_configs()
+        if not tenant_cfgs:
+            return (
+                "No MSSP tenants configured. "
+                "Set `mssp_mode = true` in settings.toml and add `[tenants.*]` blocks."
+            )
+
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        lines: list[str] = [
+            "## MSSP Tenant Health Dashboard",
+            "",
+            f"**Generated:** {ts}  | **Tenants:** {len(tenant_cfgs)}",
+            "",
+            "| Tenant | Rules | RNs | Tunnels | Nearest Expiry | Days | Lic | Errors | RAG |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+
+        # Build each tenant's row in parallel under a hard wall-clock budget.
+        # The per-tenant pulls are independent and I/O-bound, so a single
+        # unhealthy tenant (e.g. an endpoint returning 5xx that the SDK session
+        # retries with backoff) can no longer block the whole dashboard — it
+        # simply renders as a degraded "slow/skipped" row while the rest report
+        # normally. This mirrors the bounded-parallel pattern in extractor.py.
+        def _row(tc: TenantConfig) -> str:
+            try:
+                client = get_scm_client(tc)
+            except Exception:
+                return f"| **{tc.label}** | — | — | — | — | — | ⚪ | Auth failed | 🔴 |"
+
+            session = getattr(client, "session", None)
+            rules = _quick_list(
+                session, "security-rules", {"folder": tc.default_folder, "position": "pre"}
+            )
+            rns = _quick_list(session, "remote-networks", {"folder": "Remote Networks"})
+            tunnels = _quick_list(session, "ike-gateways", {"folder": "Remote Networks"})
+
+            # Nearest licence expiry — by default excludes already-expired SKUs
+            # so the RAG tracks active renewal health rather than a long-dead
+            # legacy SKU.  See _nearest_licence_expiry for the full rationale.
+            try:
+                lics = fetch_licenses(client)
+            except Exception:
+                lics = []
+            min_days, min_exp_str = _nearest_licence_expiry(lics, include_expired)
+
+            lic_st = _status(min_days)
+            lic_emoji = _STATUS_EMOJI.get(lic_st, "⚪")
+            days_s = str(min_days) if min_days is not None else "?"
+
+            # Overall RAG — red if expired, amber if expiring soon
+            if min_days is not None and min_days < 0:
+                rag = "🔴"
+            elif min_days is not None and min_days < 60:
+                rag = "🟡"
+            else:
+                rag = "🟢"
+
+            return (
+                f"| **{tc.label}** | {len(rules)} | {len(rns)} | {len(tunnels)} "
+                f"| {min_exp_str} | {days_s} | {lic_emoji} {lic_st} | 0 | {rag} |"
+            )
+
+        _DASH_TIMEOUT = 25  # seconds — overall wall-clock budget for the poll
+        rows_by_label: dict[str, str] = {}
+        pool = ThreadPoolExecutor(max_workers=min(8, len(tenant_cfgs)))
+        try:
+            fut_to_label = {pool.submit(_row, tc): tc.label for tc in tenant_cfgs.values()}
+            done, not_done = wait(
+                fut_to_label.keys(), timeout=_DASH_TIMEOUT, return_when=ALL_COMPLETED
+            )
+            for fut in done:
+                label = fut_to_label[fut]
+                try:
+                    rows_by_label[label] = fut.result()
+                except Exception:
+                    rows_by_label[label] = f"| **{label}** | — | — | — | — | — | ⚪ | Error | 🔴 |"
+            for fut in not_done:
+                label = fut_to_label[fut]
+                fut.cancel()
+                rows_by_label[label] = (
+                    f"| **{label}** | — | — | — | — | — | ⏱ | Slow/skipped | 🟡 |"
+                )
+        finally:
+            pool.shutdown(wait=False)
+
+        # Preserve the configured tenant order.
+        for tc in tenant_cfgs.values():
+            lines.append(
+                rows_by_label.get(
+                    tc.label, f"| **{tc.label}** | — | — | — | — | — | ⚪ | No data | 🔴 |"
+                )
+            )
+
+        lines += ["", f"> Data pulled live at {ts}. Slow tenants shown as ⏱; re-run to refresh."]
+        if not include_expired:
+            lines.append(
+                "> ℹ Nearest Expiry excludes already-expired SKUs (active licence health). "
+                "Call with `include_expired=True` to count expired/legacy SKUs."
+            )
+        return "\n".join(lines)
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def scm_spn_bandwidth(
+        tenant_id: str = "",
+        all_tenants: bool = False,
+        risk_threshold_low: int = 5,
+        risk_threshold_med: int = 10,
+    ) -> str:
+        """SPN bandwidth allocation, live throughput, and oversubscription risk.
+
+        Fetches configured bandwidth allocations (Mbps) per SPN region and
+        cross-references them against the remote networks (branches) connected to
+        each SPN.  Also queries the Prisma Access Insights API for live per-SPN
+        throughput (Mbps in/out, 5-minute rolling average) and shows utilisation
+        percentage against the configured allocation.
+
+        Risk thresholds (configurable):
+            HIGH    — per-branch share < risk_threshold_low Mbps (default 5)
+            MEDIUM  — per-branch share < risk_threshold_med Mbps (default 10)
+            LOW     — per-branch share >= risk_threshold_med Mbps
+            UNALLOCATED — SPN has branches but no bandwidth-allocation entry
+
+        Live throughput is fetched from the Insights v3.0 API using the same
+        OAuth session as the SCM config API.  If the tenant's token scope does not
+        include Insights access the throughput columns are omitted and the report
+        falls back to allocation-only mode automatically.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active tenant.
+            all_tenants: If True, report across all configured MSSP tenants.
+            risk_threshold_low: Per-branch Mbps below which risk is HIGH (default 5).
+            risk_threshold_med: Per-branch Mbps below which risk is MEDIUM (default 10).
+
+        Returns:
+            Markdown report: per-SPN allocation + live throughput table, branch
+            roster, QoS config, aggregate totals, and oversubscription risk summary.
+        """
+        try:
+            targets: list[tuple[str, Any]] = []
+            if all_tenants:
+                for key, tc in _load_all_tenant_configs().items():
+                    try:
+                        targets.append((tc.label, get_scm_client(tc)))
+                    except Exception as exc:
+                        logger.warning("spn_bw_auth_failed", tenant=key, error=str(exc))
+                        targets.append((tc.label, None))
+            else:
+                targets = [(tenant_id or "active tenant", get_client(tenant_id))]
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        lines: list[str] = [
+            "## SPN Bandwidth Allocation & Oversubscription Risk",
+            "",
+            f"**Generated:** {ts}",
+            f"> Risk thresholds — HIGH: <{risk_threshold_low} Mbps/branch  "
+            f"| MEDIUM: <{risk_threshold_med} Mbps/branch  | LOW: ≥{risk_threshold_med} Mbps/branch",
+            "",
+        ]
+
+        # Prefetch each tenant's network data in parallel under a wall-clock
+        # budget so one slow/unhealthy tenant can't stall the whole sweep. The
+        # rendering below is pure CPU and stays serial.
+        def _fetch(label: str, client: Any) -> dict[str, Any] | None:
+            session = getattr(client, "session", None) if client is not None else None
+            if session is None:
+                return None
+            tid = ""
+            try:
+                token_data = getattr(session, "token", None) or {}
+                tid = str(token_data.get("tsg_id", "") or "")
+            except Exception:
+                pass
+            return {
+                "throughput": _insights_spn_throughput(session, tid),
+                "allocs": _quick_list(
+                    session, "bandwidth-allocations", {"folder": "Remote Networks"}
+                ),
+                "rns": _quick_list(session, "remote-networks", {"folder": "Remote Networks"}),
+            }
+
+        _fetched = _gather_parallel(targets, _fetch)
+        multi = len(targets) > 1
+
+        for (label, client), (_lbl, _ok, _payload) in zip(targets, _fetched, strict=False):
+            if client is None:
+                lines.append(f"### {label}\n\n> ⚠️ Authentication failed — skipped.\n")
+                continue
+            if not _ok:
+                lines.append(f"### {label}\n\n> ⏱ Slow/skipped — exceeded poll budget.\n")
+                continue
+            if _payload is None:
+                lines.append(f"### {label}\n\n> ⚠️ No HTTP session available.\n")
+                continue
+
+            # Live throughput from Insights v3.0 (graceful fallback when absent)
+            throughput: dict[str, dict] = _payload["throughput"]
+            live_data = bool(throughput)
+            allocs_raw = _payload["allocs"]
+            rns_raw = _payload["rns"]
+
+            if multi:
+                lines.append(f"### {label}")
+                lines.append("")
+
+            if not allocs_raw and not rns_raw:
+                lines.append("> No bandwidth allocations or remote networks found.\n")
+                continue
+
+            # Build SPN → allocation lookup
+            spn_alloc: dict[str, dict] = {}
+            region_alloc: dict[str, dict] = {}
+            for a in allocs_raw:
+                region_alloc[a["name"]] = a
+                for spn in a.get("spn_name_list", []):
+                    spn_alloc[spn] = a
+
+            # Build SPN → branches lookup
+            spn_branches: dict[str, list[dict]] = {}
+            for rn in rns_raw:
+                spn = rn.get("spn_name") or "unassigned"
+                spn_branches.setdefault(spn, []).append(rn)
+
+            # Union of all SPNs (some may have branches but no allocation)
+            all_spns = sorted(set(list(spn_alloc.keys()) + list(spn_branches.keys())))
+
+            # ── Per-SPN summary table ──────────────────────────────────────
+            lines.append("#### SPN Allocation Summary")
+            lines.append("")
+            if live_data:
+                lines += [
+                    "| SPN | Region | Allocated (Mbps) | Branches | Mbps/Branch"
+                    " | In (Mbps) | Out (Mbps) | Util% | QoS | Risk |",
+                    "|---|---|---|---|---|---|---|---|---|---|",
+                ]
+            else:
+                lines += [
+                    "| SPN | Region | Allocated (Mbps) | Branches | Mbps/Branch | QoS | Risk |",
+                    "|---|---|---|---|---|---|---|",
+                ]
+
+            grand_alloc = 0
+            grand_branches = 0
+            high_risk_spns: list[str] = []
+            med_risk_spns: list[str] = []
+
+            for spn in all_spns:
+                alloc = spn_alloc.get(spn, {})
+                branches = spn_branches.get(spn, [])
+                mbps = alloc.get("allocated_bandwidth", 0)
+                n_branches = len(branches)
+                region_name = alloc.get("name", "—")
+
+                if n_branches == 0:
+                    per_branch_s = "—"
+                    risk = "—"
+                    risk_emoji = "⚪"
+                elif mbps == 0:
+                    per_branch_s = "0"
+                    risk = "UNALLOCATED"
+                    risk_emoji = "🔴"
+                    high_risk_spns.append(spn)
+                else:
+                    per_branch = mbps / n_branches
+                    per_branch_s = f"{per_branch:.1f}"
+                    if per_branch < risk_threshold_low:
+                        risk = "HIGH"
+                        risk_emoji = "🔴"
+                        high_risk_spns.append(spn)
+                    elif per_branch < risk_threshold_med:
+                        risk = "MEDIUM"
+                        risk_emoji = "🟡"
+                        med_risk_spns.append(spn)
+                    else:
+                        risk = "LOW"
+                        risk_emoji = "🟢"
+
+                qos = alloc.get("qos", {})
+                qos_s = (
+                    f"✓ ({qos.get('guaranteed_ratio', '?')}% guaranteed)"
+                    if qos.get("enabled")
+                    else "✗ disabled"
+                )
+
+                grand_alloc += mbps
+                grand_branches += n_branches
+
+                if live_data:
+                    tp = throughput.get(spn, {})
+                    mbps_in = tp.get("mbps_in", 0.0)
+                    mbps_out = tp.get("mbps_out", 0.0)
+                    util_pct = (
+                        f"{round((mbps_in + mbps_out) / mbps * 100, 1)}%" if mbps > 0 else "—"
+                    )
+                    lines.append(
+                        f"| `{spn}` | {region_name} | {mbps} | {n_branches}"
+                        f" | {per_branch_s} | {mbps_in} | {mbps_out}"
+                        f" | {util_pct} | {qos_s} | {risk_emoji} {risk} |"
+                    )
+                else:
+                    lines.append(
+                        f"| `{spn}` | {region_name} | {mbps} | {n_branches} "
+                        f"| {per_branch_s} | {qos_s} | {risk_emoji} {risk} |"
+                    )
+
+            # Totals row
+            grand_per = f"{grand_alloc / grand_branches:.1f}" if grand_branches > 0 else "—"
+            if live_data:
+                lines += [
+                    f"| **TOTAL** | | **{grand_alloc}** | **{grand_branches}**"
+                    f" | **{grand_per}** | | | | | |",
+                    "",
+                ]
+            else:
+                lines += [
+                    f"| **TOTAL** | | **{grand_alloc}** | **{grand_branches}** "
+                    f"| **{grand_per}** | | |",
+                    "",
+                ]
+
+            # ── Branch roster per SPN ──────────────────────────────────────
+            lines.append("#### Branch Roster by SPN")
+            lines.append("")
+            for spn in all_spns:
+                branches = spn_branches.get(spn, [])
+                if not branches:
+                    continue
+                alloc = spn_alloc.get(spn, {})
+                mbps = alloc.get("allocated_bandwidth", 0)
+                lines.append(f"**`{spn}`** — {mbps} Mbps shared across {len(branches)} branches")
+                lines.append("")
+                lines += [
+                    "| Branch | Region | Licence Type | ECMP | Subnets |",
+                    "|---|---|---|---|---|",
+                ]
+                for rn in sorted(branches, key=lambda x: x.get("name", "")):
+                    subnets = ", ".join(rn.get("subnets") or ["—"])
+                    ecmp = "✓" if rn.get("ecmp_load_balancing") == "enable" else "✗"
+                    lines.append(
+                        f"| `{rn['name']}` | {rn.get('region', '—')} "
+                        f"| {rn.get('license_type', '—')} | {ecmp} | {subnets} |"
+                    )
+                lines.append("")
+
+            # ── Risk summary ───────────────────────────────────────────────
+            if high_risk_spns or med_risk_spns:
+                lines.append("#### ⚠️ Oversubscription Risk Summary")
+                lines.append("")
+                if high_risk_spns:
+                    lines.append(
+                        f"🔴 **HIGH risk SPNs** — per-branch share < {risk_threshold_low} Mbps or unallocated:  "
+                    )
+                    for s in high_risk_spns:
+                        lines.append(f"  - `{s}`")
+                    lines.append("")
+                if med_risk_spns:
+                    lines.append(
+                        f"🟡 **MEDIUM risk SPNs** — per-branch share {risk_threshold_low}–{risk_threshold_med} Mbps:  "
+                    )
+                    for s in med_risk_spns:
+                        lines.append(f"  - `{s}`")
+                    lines.append("")
+                lines.append(
+                    "_Recommendation: increase `allocated_bandwidth` for flagged regions "
+                    "via SCM → Remote Networks → Bandwidth Allocation, or reduce branch "
+                    "count per SPN by adding a second compute location in that region._"
+                )
+                lines.append("")
+            else:
+                lines.append("🟢 All SPNs are within acceptable per-branch bandwidth thresholds.\n")
+
+            if live_data:
+                lines += [
+                    f"> Live throughput figures are 5-minute rolling averages from the "
+                    f"Prisma Access Insights API, fetched at {ts}.  "
+                    f"Util% = (In + Out) / Allocated.",
+                    "",
+                ]
+            else:
+                lines += [
+                    "> **Note:** Live throughput data was not available from the Prisma Access "
+                    "Insights API for this tenant (the token may lack the `pa-insights` scope). "
+                    "This report shows *configured allocation* only.  "
+                    "Contact your PAN account team to enable Insights access.",
+                    "",
+                ]
+
+        return "\n".join(lines)
+
+    @mcp.tool()
+    def scm_gp_session_summary(tenant_id: str = "") -> str:
+        """Live GlobalProtect and Prisma Access Agent session summary.
+
+        Queries the Prisma Access Insights API for current connected mobile-user
+        session counts and breaks them down by:
+          - Country of origin (client-side GeoIP)
+          - Compute node / PA edge location
+          - Client type: GlobalProtect vs Prisma Access Agent
+          - GP client version distribution
+
+        Compares the live connected count against the licensed MU seat count and
+        shows utilisation as a percentage.
+
+        **Privacy:** Only aggregate counts are returned — no usernames, IP addresses,
+        or device identifiers appear in the output.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active session.
+
+        Returns:
+            Markdown report: headline utilisation, country table, compute-node table,
+            agent-type and GP-version breakdown.  Sections that return no data from
+            the Insights API are omitted rather than shown as empty tables.
+        """
+        try:
+            client = get_client(tenant_id if tenant_id else "")
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_gp_session_summary')}"
+
+        session = client.session
+
+        # Extract numeric TSG ID from the JWT token (tsg_id claim)
+        tid = tenant_id  # fallback: user-supplied value
+        try:
+            token_data = getattr(session, "token", None) or {}
+            tid = str(token_data.get("tsg_id", "") or tenant_id)
+        except Exception:
+            pass
+
+        # Resolve label from cached tenant metadata when possible
+        from ..auth.oauth import get_tenant_meta as _get_meta
+
+        meta = _get_meta(tid) if tid else None
+        label = (meta.label if meta else None) or tid or "default tenant"
+
+        lines: list[str] = [f"# GP & Mobile-User Session Summary — {label}", ""]
+
+        # ── 1. Total connected vs licensed ───────────────────────────────────
+        total_data = _insights_query(session, "gp_mobileusers/connected_user_count", tid)
+        total_connected: int = total_data[0].get("user_count", 0) if total_data else 0
+
+        # PA Agent sessions (Prisma Access Agent, distinct from GP client)
+        pa_agent_data = _insights_query(session, "users/agent/connected_user_count", tid)
+        pa_agent_count: int = pa_agent_data[0].get("user_count", 0) if pa_agent_data else 0
+
+        # Licensed MU seat count from Subscription API
+        licensed_mu = 0
+        try:
+            lics = fetch_licenses(client)
+            for bundle in lics:
+                for lic in bundle.get("licenses", []):
+                    sku = (lic.get("license_type") or "").upper()
+                    app = (bundle.get("app_id") or "").lower()
+                    if "mu" in sku and "prisma_access" in app:
+                        purchased = int(lic.get("purchased_size") or 0)
+                        if purchased > licensed_mu:
+                            licensed_mu = purchased
+        except Exception:
+            pass
+
+        utilisation_pct = round(total_connected / licensed_mu * 100, 1) if licensed_mu > 0 else None
+        util_str = f"{utilisation_pct}%" if utilisation_pct is not None else "N/A (no licence data)"
+        util_icon = (
+            "🔴"
+            if utilisation_pct and utilisation_pct >= 90
+            else "🟡"
+            if utilisation_pct and utilisation_pct >= 70
+            else "🟢"
+        )
+
+        lines += [
+            "## Utilisation",
+            "",
+            "| Metric | Value |",
+            "|--------|-------|",
+            f"| Connected sessions (total) | **{total_connected}** |",
+            f"| — GlobalProtect client | {total_connected - pa_agent_count} |",
+            f"| — Prisma Access Agent | {pa_agent_count} |",
+            f"| Licensed MU seats | {licensed_mu if licensed_mu else '—'} |",
+            f"| Utilisation | {util_icon} {util_str} |",
+            "",
+        ]
+
+        # ── 2. By country ────────────────────────────────────────────────────
+        country_data = _insights_query(
+            session, "gp_mobileusers/current_connected_user_global_map", tid
+        )
+        if country_data:
+            # Field names vary; try common candidates
+            sample = country_data[0]
+            country_key = next(
+                (k for k in ("country_name", "geoip_from_country_name", "country") if k in sample),
+                None,
+            )
+            count_key = next(
+                (k for k in ("user_count", "count", "active_users") if k in sample),
+                None,
+            )
+            if country_key and count_key:
+                rows = sorted(country_data, key=lambda x: int(x.get(count_key) or 0), reverse=True)
+                lines += [
+                    "## Connected Users by Country",
+                    "",
+                    "| Country | Sessions |",
+                    "|---------|----------|",
+                ]
+                for row in rows:
+                    c = row.get(country_key) or "Unknown"
+                    n = int(row.get(count_key) or 0)
+                    lines.append(f"| {c} | {n} |")
+                lines.append("")
+
+        # ── 3. By compute node ────────────────────────────────────────────────
+        node_data = _insights_query(
+            session, "gp_mobileusers/current_connected_user_pa_location_map", tid
+        )
+        if node_data:
+            sample = node_data[0]
+            loc_key = next(
+                (
+                    k
+                    for k in (
+                        "pa_location",
+                        "edge_location_display_name",
+                        "compute_location",
+                        "location",
+                    )
+                    if k in sample
+                ),
+                None,
+            )
+            count_key = next(
+                (k for k in ("user_count", "count", "active_users") if k in sample),
+                None,
+            )
+            if loc_key and count_key:
+                rows = sorted(node_data, key=lambda x: int(x.get(count_key) or 0), reverse=True)
+                lines += [
+                    "## Connected Users by Compute Node",
+                    "",
+                    "| PA Location | Sessions |",
+                    "|-------------|----------|",
+                ]
+                for row in rows:
+                    loc = row.get(loc_key) or "Unknown"
+                    n = int(row.get(count_key) or 0)
+                    lines.append(f"| {loc} | {n} |")
+                lines.append("")
+
+        # ── 4. Agent type + GP version (from per-session list) ───────────────
+        session_rows = _insights_query(
+            session,
+            "user_list_gp",
+            tid,
+            body={
+                "properties": [
+                    {"property": "client_gp_version"},
+                    {"property": "user_type"},
+                    {"property": "platform_type"},
+                    {"property": "edge_location_display_name"},
+                ],
+                "filter": {
+                    "rules": [
+                        {
+                            "property": "connection_state",
+                            "operator": "equals",
+                            "values": ["connected"],
+                        }
+                    ]
+                },
+                "timeRange": {"last": {"hours": 2}},
+                "count": 5000,
+            },
+        )
+
+        if session_rows:
+            # Agent-type breakdown
+            agent_counts: dict[str, int] = {}
+            version_counts: dict[str, int] = {}
+            platform_counts: dict[str, int] = {}
+
+            for row in session_rows:
+                agent = row.get("user_type") or "Unknown"
+                agent_counts[agent] = agent_counts.get(agent, 0) + 1
+
+                ver = row.get("client_gp_version") or "Unknown"
+                version_counts[ver] = version_counts.get(ver, 0) + 1
+
+                plat = row.get("platform_type") or "Unknown"
+                platform_counts[plat] = platform_counts.get(plat, 0) + 1
+
+            lines += [
+                "## Client Agent Type",
+                "",
+                "| Agent Type | Sessions |",
+                "|------------|----------|",
+            ]
+            for atype, cnt in sorted(agent_counts.items(), key=lambda x: -x[1]):
+                lines.append(f"| {atype} | {cnt} |")
+            lines.append("")
+
+            if any(v != "Unknown" for v in version_counts):
+                lines += [
+                    "## GP Client Version Distribution",
+                    "",
+                    "| Version | Sessions |",
+                    "|---------|----------|",
+                ]
+                for ver, cnt in sorted(version_counts.items(), key=lambda x: -x[1])[:15]:
+                    lines.append(f"| {ver} | {cnt} |")
+                lines.append("")
+
+            if any(p != "Unknown" for p in platform_counts):
+                lines += [
+                    "## Client OS Platform",
+                    "",
+                    "| Platform | Sessions |",
+                    "|----------|----------|",
+                ]
+                for plat, cnt in sorted(platform_counts.items(), key=lambda x: -x[1]):
+                    lines.append(f"| {plat} | {cnt} |")
+                lines.append("")
+
+        # ── 5. Empty-state message ────────────────────────────────────────────
+        if total_connected == 0:
+            lines += [
+                "> **No active mobile-user sessions at this time.**  ",
+                "> Country, compute-node, and version breakdowns will appear here when users connect.",
+                "",
+            ]
+
+        lines.append(
+            f"*Snapshot taken {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')} "
+            f"via Prisma Access Insights API.*"
+        )
+        return "\n".join(lines)
+
+    @mcp.tool()
+    def scm_check_updates() -> str:
+        """Check for SDK, dependency, and pan.dev API documentation updates.
+
+        Queries PyPI for the latest published versions of all Python packages
+        used by this server and compares them against installed versions.
+        Also checks GitHub for the latest pan-scm-sdk release notes and
+        recent commits to the PAN SASE OpenAPI specs on pan.dev.
+
+        No credentials required — reads PyPI and public GitHub APIs only.
+        Uses `urllib.request` from the standard library; no new dependencies.
+
+        Returns:
+            Markdown report with:
+              • Package version table (installed vs latest, update flag)
+              • pan-scm-sdk latest release notes excerpt
+              • Recent pan.dev SASE OpenAPI spec commit log
+        """
+        lines: list[str] = ["# SDK & API Update Check", ""]
+        now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+        # ── 1. PyPI package versions ──────────────────────────────────────────
+        lines += [
+            "## Package Versions",
+            "",
+            "| Package | Installed | Latest | Status |",
+            "|---------|-----------|--------|--------|",
+        ]
+        any_update = False
+        for dist_name, _ in _PYPI_PACKAGES:
+            installed = _installed_version(dist_name)
+            latest = _pypi_latest(dist_name) or "unavailable"
+            if latest == "unavailable" or installed == "—":
+                status = "⚪ unknown"
+            elif _parse_semver(latest) > _parse_semver(installed):
+                status = "🟡 **update available**"
+                any_update = True
+            else:
+                status = "🟢 up to date"
+            lines.append(f"| `{dist_name}` | {installed} | {latest} | {status} |")
+
+        lines.append("")
+        if any_update:
+            lines += [
+                "> **Updates available.** Run `uv sync` (or `uv add <package>==<version>`) "
+                "to upgrade, then use `scm_reload` or `scm_restart` to apply.",
+                "",
+            ]
+        else:
+            lines += ["> All packages are up to date.", ""]
+
+        # ── 2. pan-scm-sdk GitHub release notes ──────────────────────────────
+        lines += ["## pan-scm-sdk Latest Release", ""]
+        release = _gh_latest_release("PaloAltoNetworks", "pan-scm-sdk")
+        if release:
+            tag = release.get("tag_name", "?")
+            pub = (release.get("published_at") or "")[:10]
+            body = (release.get("body") or "").strip()
+            # Truncate long release notes
+            if len(body) > 1200:
+                body = body[:1200] + "\n\n_[truncated — full notes on GitHub]_"
+            lines += [
+                f"**{tag}** — {pub}",
+                "",
+                body or "_No release notes._",
+                "",
+            ]
+        else:
+            lines += ["_GitHub API unavailable or rate-limited._", ""]
+
+        # ── 3. pan.dev SASE OpenAPI spec recent changes ───────────────────────
+        lines += ["## pan.dev — Recent SASE API Changes", ""]
+        commits = _gh_recent_commits("PaloAltoNetworks", "pan.dev", "products/sase/api", n=8)
+        if commits:
+            lines += [
+                "| Date | Author | Message |",
+                "|------|--------|---------|",
+            ]
+            for c in commits:
+                commit = c.get("commit", {})
+                date = (commit.get("author", {}).get("date") or "")[:10]
+                author = (commit.get("author", {}).get("name") or "?")[:25]
+                msg = (commit.get("message") or "").split("\n")[0][:90]
+                lines.append(f"| {date} | {author} | {msg} |")
+            lines.append("")
+        else:
+            lines += ["_GitHub API unavailable or no recent changes._", ""]
+
+        lines.append(f"*Checked {now_str}*")
+        return "\n".join(lines)
+
+    # ── Device Summary ──────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def scm_device_summary(
+        folder: str = "ngfw-shared",
+        tenant_id: str = "",
+    ) -> str:
+        """Device inventory health summary — count by model, connection, HA state.
+
+        Queries ``GET /config/setup/v1/devices`` and aggregates:
+          - Total device count
+          - Connected vs offline split
+          - HA state breakdown (active / passive / standalone / unknown)
+          - Count per model
+
+        Args:
+            folder: SCM folder to query (default: "ngfw-shared").
+            tenant_id: SCM tenant ID (MSSP mode).
+
+        Returns:
+            Markdown report with summary table and per-model breakdown.
+        """
+        try:
+            client = get_client(tenant_id if tenant_id else "")
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_device_summary')}"
+
+        from ..auth.oauth import get_tenant_meta as _get_meta
+
+        meta = _get_meta(tenant_id) if tenant_id else None
+        label = (meta.label if meta else None) or tenant_id or "default tenant"
+
+        lines: list[str] = [f"# Device Inventory Summary — {label}", ""]
+
+        all_devices: list[dict] = []
+        for fld in (folder, "Shared", "All"):
+            try:
+                results = list(client.device.list(folder=fld, limit=1000))
+                all_devices.extend(
+                    [d.model_dump() if hasattr(d, "model_dump") else d for d in results]
+                )
+            except Exception:
+                pass
+
+        if not all_devices:
+            lines.append("_No devices found in any folder._")
+            return "\n".join(lines)
+
+        total = len(all_devices)
+        connected = sum(1 for d in all_devices if d.get("is_connected") or d.get("connected"))
+        offline = total - connected
+
+        lines.extend(
+            [
+                "| Metric | Count |",
+                "|--------|-------|",
+                f"| **Total Devices** | **{total}** |",
+                f"| Connected | {connected} ({round(connected / total * 100, 1) if total else 0}%) |",
+                f"| Offline | {offline} ({round(offline / total * 100, 1) if total else 0}%) |",
+                "",
+            ]
+        )
+
+        # HA state breakdown
+        ha_states: dict[str, int] = {}
+        for d in all_devices:
+            state = d.get("ha_state") or d.get("haState") or "standalone"
+            ha_states[state] = ha_states.get(state, 0) + 1
+
+        if ha_states:
+            lines.extend(
+                [
+                    "## HA State Breakdown",
+                    "",
+                    "| State | Count |",
+                    "|-------|-------|",
+                ]
+            )
+            for state, count in sorted(ha_states.items(), key=lambda x: -x[1]):
+                icon = {"active": "🟢", "passive": "🟡", "standalone": "⚪"}.get(state, "🔵")
+                lines.append(f"| {icon} {state} | {count} |")
+            lines.append("")
+
+        # Per-model breakdown
+        models: dict[str, int] = {}
+        for d in all_devices:
+            model = d.get("model") or d.get("family") or "Unknown"
+            models[model] = models.get(model, 0) + 1
+
+        if models:
+            lines.extend(
+                [
+                    "## Per-Model Breakdown",
+                    "",
+                    "| Model | Count |",
+                    "|-------|-------|",
+                ]
+            )
+            for model, count in sorted(models.items(), key=lambda x: -x[1]):
+                lines.append(f"| {model} | {count} |")
+            lines.append("")
+
+        # Software versions
+        versions: dict[str, int] = {}
+        for d in all_devices:
+            ver = (
+                d.get("software_version")
+                or d.get("sw_version")
+                or d.get("softwareVersion")
+                or "Unknown"
+            )
+            versions[ver] = versions.get(ver, 0) + 1
+
+        if versions:
+            lines.extend(
+                [
+                    "## Software Versions",
+                    "",
+                    "| Version | Count |",
+                    "|---------|-------|",
+                ]
+            )
+            for ver, count in sorted(versions.items(), key=lambda x: -x[1]):
+                lines.append(f"| {ver} | {count} |")
+            lines.append("")
+
+        lines.append(f"*Queried folders: {folder}, Shared, All — {total} device(s) found*")
+        return "\n".join(lines)
+
+    # ── User Count ──────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def scm_user_count(tenant_id: str = "") -> str:
+        """Live connected user count across Prisma Access and NGFW.
+
+        Queries the Prisma Access Insights v3.0 API for current connected
+        user counts, split between GlobalProtect mobile users (Prisma Access)
+        and Prisma Access Agent users (NGFW-managed endpoints).
+
+        Also pulls the licensed Mobile User seat count for utilisation %.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+
+        Returns:
+            Markdown report: headline total, GP vs Agent split, licensed
+            capacity and utilisation percentage.
+        """
+        try:
+            client = get_client(tenant_id if tenant_id else "")
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_user_count')}"
+
+        session = client.session
+
+        tid = tenant_id
+        try:
+            token_data = getattr(session, "token", None) or {}
+            tid = str(token_data.get("tsg_id", "") or tenant_id)
+        except Exception:
+            pass
+
+        from ..auth.oauth import get_tenant_meta as _get_meta
+
+        meta = _get_meta(tid) if tid else None
+        label = (meta.label if meta else None) or tid or "default tenant"
+
+        lines: list[str] = [f"# Connected User Count — {label}", ""]
+
+        # GP mobile users (Prisma Access)
+        gp_data = _insights_query(session, "gp_mobileusers/connected_user_count", tid)
+        gp_count: int = gp_data[0].get("user_count", 0) if gp_data else 0
+
+        # PA Agent users (NGFW + Prisma Access agent-based)
+        agent_data = _insights_query(session, "users/agent/connected_user_count", tid)
+        agent_count: int = agent_data[0].get("user_count", 0) if agent_data else 0
+
+        total_connected = gp_count + agent_count
+
+        # Licensed MU seat count
+        licensed_mu = 0
+        try:
+            lics = fetch_licenses(client)
+            for bundle in lics:
+                for lic in bundle.get("licenses", []):
+                    sku = (lic.get("license_type") or "").upper()
+                    app = (bundle.get("app_id") or "").lower()
+                    if "mu" in sku and "prisma_access" in app:
+                        purchased = int(lic.get("purchased_size") or 0)
+                        if purchased > licensed_mu:
+                            licensed_mu = purchased
+        except Exception:
+            pass
+
+        utilisation_pct = round(total_connected / licensed_mu * 100, 1) if licensed_mu > 0 else None
+        util_str = f"{utilisation_pct}%" if utilisation_pct is not None else "N/A"
+
+        lines.extend(
+            [
+                "| Metric | Count |",
+                "|--------|-------|",
+                f"| **Total Connected Users** | **{total_connected}** |",
+                f"| GlobalProtect (Prisma Access) | {gp_count} |",
+                f"| PA Agent (NGFW) | {agent_count} |",
+                f"| Licensed MU Seats | {licensed_mu} |",
+                f"| Utilisation | {util_str} |",
+                "",
+            ]
+        )
+
+        if utilisation_pct is not None:
+            if utilisation_pct >= 90:
+                lines.append("⚠️ **High utilisation** — consider adding MU licences.")
+            elif utilisation_pct >= 70:
+                lines.append("⚡ **Moderate utilisation** — monitor trends.")
+            else:
+                lines.append("✅ Ample capacity available.")
+
+        return "\n".join(lines)

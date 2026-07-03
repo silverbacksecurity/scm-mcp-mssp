@@ -1,0 +1,90 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 06:00 UTC
+
+jobs:
+  secret-scan:
+    name: Secret Detection (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read  # action lists PR commits via the API
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit:
+    name: Dependency Vulnerability Audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+      - name: Export requirements and audit
+        run: |
+          # Filter out the editable project install (-e .) which pip-audit can't hash
+          uv export --no-dev --format requirements-txt | grep -v "^-e " > /tmp/requirements.txt
+          uvx pip-audit --require-hashes --strict \
+            --requirement /tmp/requirements.txt
+
+  sast:
+    name: SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+      # -ll fails the build on MEDIUM+ findings, matching the local
+      # pre-commit bandit hook so CI and pre-commit enforce the same bar.
+      - name: Run bandit (MEDIUM+ fails the build)
+        run: uvx bandit -r src/ -ll -f json -o bandit-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 30
+
+  trivy:
+    name: Trivy Filesystem Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run Trivy (table — visible in log)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+          format: table
+      - name: Run Trivy (SARIF — for artifact upload)
+        if: always()
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 0
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-results.sarif
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: trivy-sarif
+          path: trivy-results.sarif
+          retention-days: 30

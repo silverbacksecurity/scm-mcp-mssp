@@ -1,0 +1,162 @@
+# SOC2 Type II Control Mapping — scm-mcp-mssp
+# Maps Trust Services Criteria to implementation evidence in this project.
+# Review quarterly; update when code or infrastructure changes.
+
+metadata:
+  project: scm-mcp-mssp
+  compliance_target: SOC2 Type II
+  last_reviewed: 2026-06-17
+  reviewer: silverbacksec
+
+controls:
+
+  CC6.1:
+    title: Logical Access Controls
+    description: Access to data and system components is restricted to authorized users.
+    implementation:
+      - control: OAuth2 client credentials per tenant
+        location: src/scm_mcp_mssp/auth/oauth.py
+        evidence: Each tenant has a unique client_id / client_secret; no shared credentials.
+      - control: SecretStr for client_secret
+        location: src/scm_mcp_mssp/config/settings.py:29
+        evidence: Pydantic SecretStr prevents accidental logging of credentials.
+      - control: Thread-safe per-tenant client cache
+        location: src/scm_mcp_mssp/auth/oauth.py (_lock, _clients)
+        evidence: Tenant isolation enforced in memory; cross-tenant access raises TenantNotFoundError.
+      - control: .secrets.toml git-ignored
+        location: .gitignore
+        evidence: Credentials never committed to source control.
+      - control: Dedicated service account (scm-mcp user)
+        location: security/hardening/harden-server.sh
+        evidence: Service runs with no-login shell, no home directory, minimal permissions.
+    gaps: []
+    status: implemented
+
+  CC6.2:
+    title: Authentication Mechanisms
+    description: Prior to issuing system credentials, the entity registers and authorizes new users.
+    implementation:
+      - control: Tenant onboarding via settings.toml + .secrets.toml
+        location: settings.toml, security/secrets/.secrets.toml.example
+        evidence: >
+          New tenants require explicit configuration; there is no self-registration.
+          Secrets are provisioned by the MSSP operator.
+      - control: TenantConfig field validation
+        location: src/scm_mcp_mssp/config/settings.py (not_empty validator)
+        evidence: Empty tenant_id or client_id raises ValueError at startup.
+    gaps:
+      - No MFA on the MCP transport itself (stdio/SSE authenticated at OS/network layer).
+    status: partial
+
+  CC6.6:
+    title: Transmission Encryption
+    description: Logical access security measures protect against threats from sources outside the system boundaries.
+    implementation:
+      - control: All SCM API calls use HTTPS (TLS 1.2+)
+        location: pan-scm-sdk (dependency)
+        evidence: SDK enforces HTTPS for all Strata Cloud Manager API endpoints.
+      - control: SSE transport binds to 127.0.0.1 by default
+        location: src/scm_mcp_mssp/server.py:148
+        evidence: "--host default: 127.0.0.1" prevents unintended external exposure.
+      - control: Nginx TLS proxy for external SSE
+        location: security/config/tls/nginx-mcp-proxy.conf
+        evidence: TLS 1.3 termination if SSE transport is exposed beyond localhost.
+    gaps: []
+    status: implemented
+
+  CC7.2:
+    title: Security Monitoring
+    description: The entity monitors system components and the operation of controls to detect anomalies.
+    implementation:
+      - control: Structured JSON logging (structlog)
+        location: src/scm_mcp_mssp/utils/logging.py
+        evidence: All events logged as JSON with timestamp, level, tenant_id context.
+      - control: SIEM log forwarding (rsyslog)
+        location: security/siem/rsyslog-scm-mcp.conf
+        evidence: Journal entries forwarded to central SIEM over TLS.
+      - control: Detection rules for auth failures and tenant abuse
+        location: security/siem/detection-rules/
+        evidence: Sigma rules alert on credential failures and cross-tenant probing.
+      - control: Local audit log (1-year retention)
+        location: security/siem/rsyslog-scm-mcp.conf (/var/log/scm-mcp/audit.log)
+        evidence: Logrotate configured for 365-day retention with compression.
+    gaps:
+      - No real-time alerting pipeline configured (SIEM-side alert routing required).
+    status: partial
+
+  CC7.3:
+    title: Incident Response
+    description: The entity evaluates security events to determine if they are incidents.
+    implementation:
+      - control: Authentication failure Sigma rule
+        location: security/siem/detection-rules/auth-failures.sigma.yml
+        evidence: Triggers on >5 auth failures per tenant in 10 minutes.
+      - control: Tenant abuse Sigma rules
+        location: security/siem/detection-rules/tenant-abuse.sigma.yml
+        evidence: Triggers on cross-tenant probing and bulk exfiltration patterns.
+      - control: evict_tenant() for credential rotation
+        location: src/scm_mcp_mssp/auth/oauth.py:80
+        evidence: Operator can evict a compromised tenant's cached client without restart.
+    gaps:
+      - No documented incident response runbook for MCP-specific scenarios.
+      - No PagerDuty / alerting integration configured.
+    status: partial
+
+  CC7.4:
+    title: Vulnerability Management
+    description: The entity responds to identified vulnerabilities to meet its objectives.
+    accepted_risks:
+      - id: GHSA-537c-gmf6-5ccf
+        package: cryptography 46.0.7
+        severity: HIGH (CVSS 7.5)
+        summary: Vulnerable OpenSSL bundled in cryptography wheels
+        fix_version: ">=48.0.1"
+        blocker: pan-scm-sdk==0.15.0 pins cryptography<47
+        remediation: Upgrade pan-scm-sdk once it relaxes the cryptography constraint
+        accepted_date: 2026-06-17
+        residual_risk: >
+          pan-scm-sdk uses cryptography only for OAuth2 token signing/verification
+          over existing HTTPS connections; the TLS stack is provided by httpx/OS.
+          Attack surface is limited to token forgery, not network-level exploitation.
+    implementation:
+      - control: Automated dependency audit (pip-audit)
+        location: .github/workflows/security-scan.yml (dependency-audit job)
+        evidence: Runs on every push and weekly; blocks on known CVEs.
+      - control: SAST scanning (bandit)
+        location: .github/workflows/security-scan.yml (sast job)
+        evidence: Blocks merge on HIGH/CRITICAL findings in src/.
+      - control: Secret scanning (gitleaks)
+        location: .github/workflows/security-scan.yml (secret-scan job)
+        evidence: Scans full git history on every push.
+      - control: detect-private-key pre-commit hook
+        location: .pre-commit-config.yaml
+        evidence: Blocks commits containing private key material.
+      - control: Filesystem scan (trivy)
+        location: .github/workflows/security-scan.yml (trivy job)
+        evidence: Scans source tree for HIGH/CRITICAL CVEs; uploads SARIF to GitHub.
+    gaps: []
+    status: implemented
+
+  CC8.1:
+    title: Change Management
+    description: The entity authorizes, designs, develops or acquires, implements, operates, approves, maintains, and monitors environmental, infrastructure, and software changes.
+    implementation:
+      - control: no-commit-to-branch pre-commit hook (main branch protection)
+        location: .pre-commit-config.yaml
+        evidence: Prevents direct commits to main; enforces PR workflow.
+      - control: CI pipeline (lint, type-check, tests)
+        location: .github/workflows/ci.yml
+        evidence: All changes validated by ruff, mypy, pytest before merge.
+      - control: Security scan CI pipeline
+        location: .github/workflows/security-scan.yml
+        evidence: Security gates run in parallel with functional CI.
+    gaps:
+      - No required PR reviewers configured in GitHub branch protection settings.
+      - No CHANGELOG automation (maintained manually).
+    status: partial
+
+evidence_collection:
+  audit_logs: /var/log/scm-mcp/audit.log
+  ci_runs: https://github.com/silverbacksecurity/scm-mcp-mssp/actions
+  vulnerability_reports: GitHub Security tab (SARIF uploads from trivy)
+  dependency_audits: GitHub Actions artifacts (bandit-report)
