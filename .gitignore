@@ -39,7 +39,6 @@ tenant-*.md
 # Dev artefacts
 ai-design-components/
 backups/
-scripts/gen_docs.py
 
 # Testing / quality
 .coverage
