@@ -7,12 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-04
+
 ### Added
 - **`scm_spi_status`** — Service Provider Interconnect visibility (pan.dev `sase/mt-interconnect`, Feb 2026): one view-based tool covering interconnect summary/inventory, physical connections, SPI regions, tenant settings, and IP-pool usage monitoring; actionable 401/403/404/5xx messages for accounts without an MSP role (`tools/mt_interconnect.py`)
 - **`scm_pab_msp_summary` / `scm_pab_msp_report`** — Prisma Access Browser for MSP reporting (pan.dev `sase/pab-msp`, Feb 2026): region-level user/tenant/CIE roll-ups and per-TSG security-event reports (blocked malware, websites, extensions, category breakdowns) — browser-control evidence for CE/NCSC reporting (`tools/pab_msp.py`)
 - **`scripts/gen_tool_from_spec.py`** — spec-driven tool scaffolding: emits read-only MCP tool scaffolds (typed query params, docstrings, graceful 4xx/5xx rendering) for any endpoint-catalog family, fetching specs pinned to the catalog's pan.dev commit; scaffolds are curated into consolidated tools before registration
 - **`ROADMAP.md`** — tracks new pan.dev API families and planned coverage (SPI in AS-BUILT/NOC, PAB posture columns, Config Orchestration site-based RN, mt-monitor aggregates, Insights 2.0, 5G)
 - **pan.dev endpoint catalog** — bundled index of 1,593 endpoints across 23 API families generated from the MIT-licensed pan.dev OpenAPI specs (`sase`, `scm`, `access` trees) with per-file git blob SHAs (`resources/endpoint_catalog.json` + loader `resources/endpoint_catalog.py`, regenerate via `scripts/gen_endpoint_catalog.py`); REST fallbacks in `audit.extractor` now resolve SDK resource names to their exact documented URL (override → SDK `ENDPOINT` → catalog → naive slug) instead of guessing a slug; `scm_check_updates` gains an **OpenAPI Spec Drift** section that diffs the bundled catalog's blob SHAs against the live pan.dev tree (4 unauthenticated GitHub API calls) and reports new/changed/removed spec files — new API families like SP Interconnect or Prisma Browser for MSP now surface automatically
+
+### Fixed
+- **`docs/TOOL_REFERENCE.md` regenerated (84 → 108 tools)** — `scripts/gen_docs.py` silently skipped modules missing from its hardcoded section list; it now auto-discovers every `tools/*.py` with `@mcp.tool()` functions (curated titles with docstring-derived fallback), emits GitHub-correct heading anchors, escapes pipes in parameter tables, and is tracked in the repo
+
+## [0.7.0] - 2026-07-03
+
+First public release (squash-published snapshot; development history remains private).
+
+### Added
+- **DOCX works out of the box** — `pypandoc-binary` dependency bundles pandoc; `_find_pandoc()` resolves system pandoc first, bundled binary as fallback
+- `settings.example.toml` template; the tenant registry (`settings.toml`) is git-ignored
+
+### Fixed
+- **AS-BUILT document quality** — SDK enums render as wire values (`model_dump(mode="json")`), empty table cells normalise to "—", dict/list cells unwrapped, §2.1 architecture diagram draws only compute locations actually in use, mmdc diagram rendering self-heals via Chrome discovery + `--no-sandbox` retry (DOCX embeds PNGs again)
+- **CLI** — four menu ops called non-existent helpers (tenant/NOC dashboards, licence forecast, tier catalogue, config clone); config-versions API moved to `/config/operations/v1` with per-scope running-version tracking; DOCX conversion failure reports honestly and saves Markdown instead
+- **CI type-check greened** — mypy 103 → 0 errors
 
 ## [0.6.0] - 2026-06-30
 
