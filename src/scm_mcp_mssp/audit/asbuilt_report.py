@@ -2406,6 +2406,36 @@ class AsBuiltReportBuilder:
             ]
             self._table(["Route Map Name", "Folder / Snippet"], rows)
 
+        # ── 3.4.7 WAN / Internet-Facing Interface IP Addresses ────────────────
+        self._h(4, "3.4.7 WAN / Internet-Facing Interface IP Addresses")
+        if snap.ngfw_interface_ips:
+            self._p(
+                "_Parsed from each device's running-config via the NGFW Operations API. "
+                "Shows the **configured** address — a DHCP-configured interface reports "
+                "`dhcp` addressing without the live-leased IP, since this endpoint reflects "
+                "configuration rather than live operational state._"
+            )
+            rows = []
+            for rec in snap.ngfw_interface_ips:
+                ips = ", ".join(rec.get("ip_addresses") or []) or "—"
+                rows.append(
+                    [
+                        rec.get("device_name") or _NA,
+                        rec.get("interface") or _NA,
+                        rec.get("zone") or "—",
+                        rec.get("addressing") or _NA,
+                        ips,
+                    ]
+                )
+            self._table(["Device", "Interface", "Zone", "Addressing", "IP Address(es)"], rows)
+        else:
+            self._note(
+                "No interface IP data returned. This requires the **NGFW Operations "
+                "entitlement** on the TSG (same requirement as `scm_ngfw_local_config_get`) "
+                "— contact your PAN account team to enable it, or populate manually."
+            )
+        self._p()
+
     # ── Section 3.5: PA Operational Summary (Insights) ───────────────────────
 
     def _section_3b(self) -> None:
@@ -2753,6 +2783,52 @@ class AsBuiltReportBuilder:
                 ],
                 [[_NA, _NA, _NA, _NA, _NA, _NA]],
             )
+
+        # 4.2.1 Live WAN IP Addresses
+        self._h(3, "4.2.1 Live WAN IP Addresses")
+        if snap.sdwan_wan_ips:
+            self._p(
+                "_Live-bound IP address per internet/MPLS-facing interface, read from "
+                "element interface status (covers both static and DHCP-assigned circuits)._"
+            )
+            rows = []
+            for w in snap.sdwan_wan_ips:
+                v4 = ", ".join(w.get("ipv4_addresses") or []) or "—"
+                v6 = ", ".join(w.get("ipv6_addresses") or []) or "—"
+                state = w.get("operational_state") or _NA
+                state_icon = "✅" if state == "up" else ("❌" if state == "down" else "—")
+                rows.append(
+                    [
+                        w.get("site_name") or _NA,
+                        w.get("element_name") or _NA,
+                        w.get("interface_name") or _NA,
+                        w.get("used_for") or _NA,
+                        w.get("config_type") or _NA,
+                        f"{state_icon} {state}",
+                        v4,
+                        v6,
+                    ]
+                )
+            self._table(
+                [
+                    "Site",
+                    "Element",
+                    "Interface",
+                    "Used For",
+                    "Addressing",
+                    "State",
+                    "IPv4 Address(es)",
+                    "IPv6 Address(es)",
+                ],
+                rows,
+            )
+        else:
+            self._note(
+                "No live WAN IP data returned. Either no interfaces are marked "
+                "used_for=public/private, or the SD-WAN API session lacks visibility "
+                "into interface status. Run `sdwan_wan_ip_summary` directly to check."
+            )
+        self._p()
 
         # 4.3 App-Defined Routing
         self._h(3, "4.3 App-Defined Routing (Policy Sets)")

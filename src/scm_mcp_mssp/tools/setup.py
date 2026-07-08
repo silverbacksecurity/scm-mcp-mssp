@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 
 from ..auth.oauth import evict_tenant, list_loaded_tenants
 from ..utils.errors import handle_scm_exception
+from ..utils.formatting import format_result as _fmt
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +34,8 @@ def register_setup_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.folder.list(limit=limit)
+            # Folder.list() has no real `limit` kwarg — slice client-side.
+            results = client.folder.list()[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -66,7 +68,9 @@ def register_setup_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.device.list(folder=folder, limit=limit)
+            # Device.list() ignores `folder` (devices are tenant-global, not
+            # folder-scoped) and has no real `limit` kwarg.
+            results = client.device.list()[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -83,7 +87,8 @@ def register_setup_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.snippet.list(limit=limit)
+            # Snippet.list() has no real `limit` kwarg — slice client-side.
+            results = client.snippet.list()[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -116,17 +121,3 @@ def register_setup_tools(mcp: FastMCP, get_client: Any) -> None:
             logger.info("tenant_evicted", tenant_id=tenant_id)
             return f"Tenant '{tenant_id}' evicted; next request will re-authenticate."
         return f"Tenant '{tenant_id}' was not loaded."
-
-
-def _fmt(data: Any) -> str:
-    import json
-
-    if hasattr(data, "model_dump"):
-        return json.dumps(data.model_dump(), indent=2, default=str)
-    if isinstance(data, list):
-        return json.dumps(
-            [d.model_dump() if hasattr(d, "model_dump") else d for d in data],
-            indent=2,
-            default=str,
-        )
-    return json.dumps(data, indent=2, default=str)

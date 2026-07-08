@@ -145,7 +145,15 @@ def register_posture_tools(mcp: FastMCP, get_client: Any) -> None:
 
             if all_tenants:
                 tenant_map = _load_tenant_configs()
-                targets = [(k, tc.label or k, get_scm_client(tc)) for k, tc in tenant_map.items()]
+                targets = []
+                for k, tc in tenant_map.items():
+                    label = tc.label or k
+                    try:
+                        targets.append((k, label, get_scm_client(tc)))
+                    except Exception as exc:
+                        # A single tenant with bad/rotated credentials shouldn't
+                        # abort the whole cross-tenant sweep.
+                        tenant_errors.append(f"{label}: {exc}")
             else:
                 client = get_client(tenant_id)
                 targets = [(tenant_id or "default", tenant_id or "default", client)]
@@ -251,7 +259,20 @@ def register_posture_tools(mcp: FastMCP, get_client: Any) -> None:
         try:
             if all_tenants:
                 tenant_map = _load_tenant_configs()
-                targets = [(k, tc.label or k, get_scm_client(tc)) for k, tc in tenant_map.items()]
+                targets: list[tuple[str, str, Any]] = []
+                for k, tc in tenant_map.items():
+                    label = tc.label or k
+                    try:
+                        targets.append((k, label, get_scm_client(tc)))
+                    except Exception as exc:
+                        # A single tenant with bad/rotated credentials shouldn't
+                        # abort the whole cross-tenant dashboard — surface it as
+                        # a per-tenant error row instead (the "no session" branch
+                        # below already handles a None client gracefully).
+                        logger.warning(
+                            "incident_summary_tenant_auth_failed", tenant=k, error=str(exc)
+                        )
+                        targets.append((k, label, None))
             else:
                 client = get_client(tenant_id)
                 targets = [(tenant_id or "default", tenant_id or "default", client)]

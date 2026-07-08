@@ -151,11 +151,15 @@ def topology_to_mermaid(
     connections: list[dict[str, Any]],
     sites: list[dict[str, Any]],
     wan_networks: list[dict[str, Any]],
+    wan_ips: list[dict[str, Any]] | None = None,
 ) -> str:
     """
     Convert topology connections into a Mermaid graph TB diagram.
 
     Layout: Hubs at top → WAN clouds in middle → Spokes at bottom
+
+    wan_ips (optional): records from `_extract_sdwan_wan_ips`, used to annotate
+    each site node with its live public/private WAN IP address(es).
     """
     if not connections and not sites:
         return ""
@@ -163,6 +167,16 @@ def topology_to_mermaid(
     lines: list[str] = ["graph TB"]
 
     site_by_id = {s["id"]: s for s in sites if "id" in s}
+
+    # site_id -> ["1.2.3.4 (public)", ...] for node-label annotation
+    ips_by_site: dict[str, list[str]] = {}
+    for rec in wan_ips or []:
+        sid = rec.get("site_id")
+        addrs = rec.get("ipv4_addresses") or []
+        if not sid or not addrs:
+            continue
+        for addr in addrs:
+            ips_by_site.setdefault(sid, []).append(f"{addr} ({rec.get('used_for', '')})")
 
     # Collect which WAN networks actually appear in connections
     active_wan_nets: dict[str, str] = {}  # network_name → sanitised_id
@@ -199,6 +213,9 @@ def topology_to_mermaid(
         addr = site.get("address") or {}
         city = addr.get("city", "") or addr.get("country", "")
         label = f"{name}\n({city})" if city else name
+        site_ips = ips_by_site.get(sid)
+        if site_ips:
+            label += "\n" + "\n".join(site_ips[:2])  # cap at 2 lines to keep nodes readable
         safe_id = sid.replace("-", "_")
         role = (site.get("element_cluster_role") or "spoke").lower()
         icon = "🏭" if role == "hub" else "🏢"

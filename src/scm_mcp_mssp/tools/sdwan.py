@@ -7,20 +7,16 @@ All tools gracefully degrade if prisma-sase is not installed or auth fails.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from ..auth.oauth import get_tenant_meta, list_loaded_tenants
 from ..auth.sdwan import get_sdwan_client, safe_items
+from ..utils.formatting import format_result as _fmt
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-def _fmt(data: Any) -> str:
-    return json.dumps(data, indent=2, default=str)
 
 
 def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
@@ -98,13 +94,12 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
         """
         try:
             sdk = _sdwan(tenant_id)
-            kwargs: dict = {}
-            if site_id:
-                kwargs["site_id"] = site_id
-            if element_id:
-                kwargs["element_id"] = element_id
-            resp = sdk.get.elements(**kwargs)
+            # Get.elements() only accepts `element_id` — it has no server-side
+            # site_id filter, so fetch everything and filter client-side.
+            resp = sdk.get.elements(element_id=element_id or None)
             elements = safe_items(resp)
+            if site_id:
+                elements = [e for e in elements if e.get("site_id") == site_id]
             summary = [
                 {
                     "id": e.get("id"),
@@ -169,6 +164,47 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                 for i in ifaces
             ]
             return _fmt({"site_id": site_id, "total": len(summary), "wan_interfaces": summary})
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── WAN IP Summary ───────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_wan_ip_summary(tenant_id: str = "", site_id: str = "") -> str:
+        """Report the live public/private WAN IP address bound to each ION element.
+
+        For every element (or just those at `site_id` if given), inspects each
+        interface marked used_for="public" or "private" in its config and reads
+        the live-bound IP from the interface's operational status — this covers
+        both static and DHCP-assigned WAN circuits, which the config object
+        alone cannot show for DHCP.
+
+        Use this to populate a WAN IP inventory table/diagram for AS-BUILT
+        documentation, or to spot circuits that are down or missing an address.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            site_id: Optional — limit to elements at this site.
+
+        Returns:
+            JSON array of {site_name, element_name, interface_name, used_for,
+            operational_state, ipv4_addresses, ipv6_addresses} records.
+        """
+        try:
+            from ..audit.extractor import extract_sdwan_wan_ips
+
+            sdk = _sdwan(tenant_id)
+            sites = safe_items(sdk.get.sites())
+            elements = safe_items(sdk.get.elements())
+            if site_id:
+                sites = [s for s in sites if s.get("id") == site_id]
+                elements = [e for e in elements if e.get("site_id") == site_id]
+
+            wan_ips, errors = extract_sdwan_wan_ips(sdk, sites, elements)
+            result: dict[str, Any] = {"total": len(wan_ips), "wan_ips": wan_ips}
+            if errors:
+                result["warnings"] = errors
+            return _fmt(result)
         except Exception as exc:
             return f"Error: {exc}"
 
@@ -423,6 +459,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
             Mermaid diagram as a fenced code block string.
         """
         try:
+            from ..audit.extractor import extract_sdwan_wan_ips
             from ..audit.sdwan_topo import build_topology, topology_to_mermaid
             from ..auth.sdwan import safe_items
 
@@ -430,6 +467,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
 
             sites = safe_items(sdk.get.sites())
             wan_networks = safe_items(sdk.get.wannetworks())
+            elements = safe_items(sdk.get.elements())
 
             # Collect WAN interfaces across all sites
             wan_ifaces: list[dict[str, Any]] = []
@@ -440,7 +478,8 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     wan_ifaces.extend(safe_items(resp))
 
             connections = build_topology(sdk, sites, wan_ifaces, wan_networks)
-            diagram = topology_to_mermaid(connections, sites, wan_networks)
+            wan_ips, _wan_ip_errors = extract_sdwan_wan_ips(sdk, sites, elements)
+            diagram = topology_to_mermaid(connections, sites, wan_networks, wan_ips=wan_ips)
 
             if not diagram:
                 return "No VPN topology data returned — check SD-WAN credentials and site configuration."

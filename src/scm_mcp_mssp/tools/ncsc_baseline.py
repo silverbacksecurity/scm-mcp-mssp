@@ -509,7 +509,7 @@ def register_ncsc_tools(mcp: FastMCP, get_client: Callable[..., Any]) -> None:
             seen_ids: set[str] = set()
             rules: list[Any] = []
             for pos in positions:
-                for r in client.security_rule.list(folder=folder, position=pos):
+                for r in client.security_rule.list(folder=folder, rulebase=pos):
                     rid = str(getattr(r, "id", ""))
                     if rid and rid not in seen_ids:
                         seen_ids.add(rid)
@@ -638,7 +638,7 @@ def register_ncsc_tools(mcp: FastMCP, get_client: Callable[..., Any]) -> None:
             seen_ids: set[str] = set()
             rules: list[Any] = []
             for pos in positions:
-                for r in client.security_rule.list(folder=folder, position=pos):
+                for r in client.security_rule.list(folder=folder, rulebase=pos):
                     rid = str(getattr(r, "id", None) or getattr(r, "name", ""))
                     if rid not in seen_ids:
                         seen_ids.add(rid)
@@ -769,7 +769,7 @@ def register_ncsc_tools(mcp: FastMCP, get_client: Callable[..., Any]) -> None:
             seen_ids: set[str] = set()
             rules: list[Any] = []
             for pos in positions:
-                for r in client.security_rule.list(folder=folder, position=pos):
+                for r in client.security_rule.list(folder=folder, rulebase=pos):
                     rid = str(getattr(r, "id", None) or getattr(r, "name", ""))
                     if rid not in seen_ids:
                         seen_ids.add(rid)

@@ -13,6 +13,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..utils.errors import handle_scm_exception
+from ..utils.formatting import format_result as _fmt
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -40,10 +41,12 @@ def register_object_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.address.list(folder=folder, limit=limit)
+            # Address.list() has no real `limit` kwarg (silently swallowed into
+            # **filters) — it always fetches every page, so slice client-side.
+            results = client.address.list(folder=folder)
             if name_filter:
                 results = [r for r in results if name_filter.lower() in r.name.lower()]
-            return _fmt(results)
+            return _fmt(results[: max(0, limit)])
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
 
@@ -136,7 +139,8 @@ def register_object_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.address_group.list(folder=folder, limit=limit)
+            # AddressGroup.list() has no real `limit` kwarg — slice client-side.
+            results = client.address_group.list(folder=folder)[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -154,7 +158,8 @@ def register_object_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.service.list(folder=folder, limit=limit)
+            # Service.list() has no real `limit` kwarg — slice client-side.
+            results = client.service.list(folder=folder)[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -172,7 +177,8 @@ def register_object_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.tag.list(folder=folder, limit=limit)
+            # Tag.list() has no real `limit` kwarg — slice client-side.
+            results = client.tag.list(folder=folder)[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -195,18 +201,3 @@ def register_object_tools(mcp: FastMCP, get_client: Any) -> None:
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
-
-
-def _fmt(data: Any) -> str:
-    """Serialise a Pydantic model, list of models, or plain dict to a string."""
-    import json
-
-    if hasattr(data, "model_dump"):
-        return json.dumps(data.model_dump(), indent=2, default=str)
-    if isinstance(data, list):
-        return json.dumps(
-            [d.model_dump() if hasattr(d, "model_dump") else d for d in data],
-            indent=2,
-            default=str,
-        )
-    return json.dumps(data, indent=2, default=str)

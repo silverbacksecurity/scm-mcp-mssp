@@ -16,6 +16,10 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from ..utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 ServiceTier = Literal["gold", "silver", "bronze"]
 
 
@@ -178,3 +182,33 @@ class Settings(BaseSettings):
 @functools.lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings.from_dynaconf()
+
+
+def load_all_tenant_configs() -> dict[str, TenantConfig]:
+    """Merge settings.toml + .secrets.toml `[tenants.*]` sections into TenantConfig objects.
+
+    Secrets overlay base settings key-by-key per tenant so a customer's OAuth2
+    credentials in the git-ignored .secrets.toml can be layered onto its
+    non-secret metadata (folder, tier, label, ...) in the checked-in
+    settings.toml. A tenant block that fails validation is skipped rather than
+    aborting the whole load.
+    """
+    try:
+        from dynaconf import Dynaconf  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+
+    base = Dynaconf(envvar_prefix="SCM_MCP", settings_files=["settings.toml"], load_dotenv=True)
+    secrets = Dynaconf(envvar_prefix="SCM_MCP", settings_files=[".secrets.toml"], load_dotenv=False)
+    base_tenants: dict[str, Any] = dict(base.get("tenants") or {})
+    secret_tenants: dict[str, Any] = dict(secrets.get("tenants") or {})
+
+    result: dict[str, TenantConfig] = {}
+    for key in set(base_tenants) | set(secret_tenants):
+        merged = dict(base_tenants.get(key) or {})
+        merged.update(secret_tenants.get(key) or {})
+        try:
+            result[key] = TenantConfig(**merged)
+        except Exception as exc:
+            logger.warning("tenant_config_invalid", tenant=key, error=str(exc))
+    return result

@@ -24,7 +24,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..auth.oauth import fetch_licenses, get_scm_client
-from ..config.settings import TenantConfig
+from ..config.settings import TenantConfig, load_all_tenant_configs
 from ..utils.errors import handle_scm_exception
 from ..utils.logging import get_logger
 
@@ -41,24 +41,7 @@ _CERT_FOLDERS = ["Shared", "Remote Networks", "Mobile Users", "Service Connectio
 def _load_all_tenant_configs() -> dict[str, TenantConfig]:
     """Load all MSSP tenant configs from settings.toml + .secrets.toml."""
     try:
-        from dynaconf import Dynaconf  # type: ignore[import-untyped]
-
-        base = Dynaconf(envvar_prefix="SCM_MCP", settings_files=["settings.toml"], load_dotenv=True)
-        secrets = Dynaconf(
-            envvar_prefix="SCM_MCP", settings_files=[".secrets.toml"], load_dotenv=False
-        )
-        base_t: dict[str, Any] = dict(base.get("tenants") or {})
-        secret_t: dict[str, Any] = dict(secrets.get("tenants") or {})
-
-        out: dict[str, TenantConfig] = {}
-        for key in set(base_t) | set(secret_t):
-            merged = dict(base_t.get(key) or {})
-            merged.update(secret_t.get(key) or {})
-            try:
-                out[key] = TenantConfig(**merged)
-            except Exception as exc:
-                logger.warning("tenant_config_invalid", tenant=key, error=str(exc))
-        return out
+        return load_all_tenant_configs()
     except Exception as exc:
         logger.warning("tenant_config_load_failed", error=str(exc))
         return {}

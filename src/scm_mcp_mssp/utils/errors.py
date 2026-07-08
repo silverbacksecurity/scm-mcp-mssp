@@ -56,7 +56,11 @@ def handle_scm_exception(exc: Exception, **log_context: Any) -> str:
     Unexpected errors are logged at ERROR with a full stack trace.
     """
     name = type(exc).__name__
-    msg = str(exc)
+    # pan-scm-sdk's APIError.__str__ only renders `details`/`http_status_code`/
+    # `error_code` — when all three are unset (e.g. a bare 404 with no response
+    # body) it returns "" even though the real text lives in exc.message.
+    # Fall back to that attribute so callers never see a blank error string.
+    msg = str(exc) or str(getattr(exc, "message", "") or "") or "(no error detail available)"
     formatted = f"[{name}] {msg}"
 
     if name in _EXPECTED_EXCEPTION_NAMES:

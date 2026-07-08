@@ -104,7 +104,7 @@ def _run_ncsc_checks(
         seen: set[str] = set()
         rules: list[Any] = []
         for pos in positions:
-            for r in client.security_rule.list(folder=folder, position=pos):
+            for r in client.security_rule.list(folder=folder, rulebase=pos):
                 rid = str(getattr(r, "id", None) or getattr(r, "name", ""))
                 if rid not in seen:
                     seen.add(rid)

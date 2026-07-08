@@ -6,7 +6,6 @@ Launch with:  uv run scm-mcp-cli
 
 from __future__ import annotations
 
-import contextlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -24,7 +23,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
-from .config.settings import TenantConfig
+from .config.settings import TenantConfig, load_all_tenant_configs
 
 console = Console()
 
@@ -88,18 +87,7 @@ SUBTITLE = "Strata Cloud Manager · MSSP Edition"
 def _load_all_tenants() -> dict[str, TenantConfig]:
     """Load and merge settings.toml + .secrets.toml, return keyed TenantConfigs."""
     try:
-        from dynaconf import Dynaconf  # type: ignore[import-untyped]
-
-        base = Dynaconf(envvar_prefix="SCM_MCP", settings_files=["settings.toml"], load_dotenv=True)
-        sec = Dynaconf(envvar_prefix="SCM_MCP", settings_files=[".secrets.toml"], load_dotenv=False)
-        base_t: dict[str, Any] = dict(base.get("tenants") or {})
-        sec_t: dict[str, Any] = dict(sec.get("tenants") or {})
-        result: dict[str, TenantConfig] = {}
-        for k in set(base_t) | set(sec_t):
-            cfg = {**dict(base_t.get(k) or {}), **dict(sec_t.get(k) or {})}
-            with contextlib.suppress(Exception):
-                result[k] = TenantConfig(**cfg)
-        return result
+        return load_all_tenant_configs()
     except Exception as exc:
         console.print(f"[red]Failed to load tenants: {exc}[/red]")
         return {}

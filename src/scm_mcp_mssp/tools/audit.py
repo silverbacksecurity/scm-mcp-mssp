@@ -49,6 +49,7 @@ from ..audit.extractor import (
     extract_managed_tenants,
     extract_mt_monitor_alerts,
     extract_ngfw_devices,
+    extract_ngfw_interface_ips,
     extract_ngfw_routing,
     extract_pab_tenant,
     extract_sdwan_snapshot,
@@ -1608,6 +1609,7 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
                     extract_cdl(client, snap)
                     extract_ngfw_devices(client, snap)
                     extract_ngfw_routing(client, snap)
+                    extract_ngfw_interface_ips(client, snap)
                     extract_airs(client, snap)
                     extract_enterprise_dlp(client, snap)
                     extract_iot_security(client, snap)

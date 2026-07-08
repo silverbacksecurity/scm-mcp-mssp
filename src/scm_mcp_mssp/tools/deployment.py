@@ -15,6 +15,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..utils.errors import handle_scm_exception
+from ..utils.formatting import format_result as _fmt
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -60,13 +61,18 @@ def register_deployment_tools(mcp: FastMCP, get_client: Any) -> None:
         """List remote networks (branch/SD-WAN connections) in SCM.
 
         Args:
-            folder: SCM folder.
+            folder: SCM folder (unused — remote networks always live in the
+                    fixed "Remote Networks" container; kept for interface
+                    consistency with the other _list tools).
             tenant_id: SCM tenant ID.
             limit: Maximum results.
         """
         try:
             client = get_client(tenant_id)
-            results = client.remote_network.list(folder=folder, limit=limit)
+            # The API rejects any folder value other than "Remote Networks" for
+            # this resource (400 '"folder" must be [Remote Networks]'), and
+            # RemoteNetworks.list() has no real `limit` kwarg — slice client-side.
+            results = client.remote_network.list(folder="Remote Networks")[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -77,12 +83,12 @@ def register_deployment_tools(mcp: FastMCP, get_client: Any) -> None:
 
         Args:
             name: Remote network name.
-            folder: SCM folder.
+            folder: SCM folder (unused — see scm_remote_network_list).
             tenant_id: SCM tenant ID.
         """
         try:
             client = get_client(tenant_id)
-            obj = client.remote_network.fetch(name=name, folder=folder)
+            obj = client.remote_network.fetch(name=name, folder="Remote Networks")
             return _fmt(obj)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -100,7 +106,9 @@ def register_deployment_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.service_connection.list(folder=folder, limit=limit)
+            # ServiceConnection.list() ignores `folder` (always uses the fixed
+            # "Service Connections" container) and has no real `limit` kwarg.
+            results = client.service_connection.list()[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -118,7 +126,9 @@ def register_deployment_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.bandwidth_allocation.list(folder=folder, limit=limit)
+            # BandwidthAllocations.list() ignores `folder` (it's a global,
+            # non-folder-scoped resource) and has no real `limit` kwarg.
+            results = client.bandwidth_allocation.list()[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -567,15 +577,3 @@ def register_deployment_tools(mcp: FastMCP, get_client: Any) -> None:
 
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc, tool='scm_config_rollback', version=version, tenant_id=tenant_id)}"
-
-
-def _fmt(data: Any) -> str:
-    if hasattr(data, "model_dump"):
-        return json.dumps(data.model_dump(), indent=2, default=str)
-    if isinstance(data, list):
-        return json.dumps(
-            [d.model_dump() if hasattr(d, "model_dump") else d for d in data],
-            indent=2,
-            default=str,
-        )
-    return json.dumps(data, indent=2, default=str)

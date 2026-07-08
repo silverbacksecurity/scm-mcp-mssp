@@ -12,6 +12,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..utils.errors import handle_scm_exception
+from ..utils.formatting import format_result as _fmt
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +34,8 @@ def register_network_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.security_zone.list(folder=folder, limit=limit)
+            # SecurityZone.list() has no real `limit` kwarg — slice client-side.
+            results = client.security_zone.list(folder=folder)[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -57,7 +59,8 @@ def register_network_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.nat_rule.list(folder=folder, limit=limit, position=position)
+            # NatRule.list() has no real `limit` kwarg — slice client-side.
+            results = client.nat_rule.list(folder=folder, position=position)[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -108,7 +111,8 @@ def register_network_tools(mcp: FastMCP, get_client: Any) -> None:
         """
         try:
             client = get_client(tenant_id)
-            results = client.ipsec_tunnel.list(folder=folder, limit=limit)
+            # IPsecTunnel.list() has no real `limit` kwarg — slice client-side.
+            results = client.ipsec_tunnel.list(folder=folder)[: max(0, limit)]
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
@@ -135,17 +139,3 @@ def register_network_tools(mcp: FastMCP, get_client: Any) -> None:
             return _fmt(results)
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc)}"
-
-
-def _fmt(data: Any) -> str:
-    import json
-
-    if hasattr(data, "model_dump"):
-        return json.dumps(data.model_dump(), indent=2, default=str)
-    if isinstance(data, list):
-        return json.dumps(
-            [d.model_dump() if hasattr(d, "model_dump") else d for d in data],
-            indent=2,
-            default=str,
-        )
-    return json.dumps(data, indent=2, default=str)

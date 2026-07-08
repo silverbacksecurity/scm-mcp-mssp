@@ -389,6 +389,57 @@ def register_adnsr_tools(mcp: FastMCP, get_client: Any) -> None:
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc, tool='scm_ngfw_local_config_get', tenant_id=tenant_id)}"
 
+    @mcp.tool()
+    def scm_ngfw_wan_ip_summary(tenant_id: str = "", serial: str = "") -> str:
+        """Report configured WAN/internet-facing interface IP addresses for NGFW devices.
+
+        For each SCM-managed NGFW device (or just `serial` if given), fetches its
+        running-config via the NGFW Operations API and parses physical/aggregate
+        interfaces (ethernetX/Y, aeN) that have Layer 3 addressing, along with
+        their assigned security zone.
+
+        Use this to populate a WAN IP inventory table for AS-BUILT documentation.
+        Note: this reflects **configuration**, not live operational state — a
+        DHCP-configured interface is reported with addressing="dhcp" but no IP,
+        since (unlike Prisma SD-WAN) there is no live-lease-status endpoint for
+        NGFW interfaces.
+
+        **Requires NGFW Operations entitlement** on the TSG.
+
+        Args:
+            tenant_id: SCM tenant ID. Defaults to active tenant.
+            serial: Optional — limit to a single device serial number.
+        """
+        try:
+            from ..audit.extractor import extract_ngfw_devices, extract_ngfw_interface_ips
+            from ..audit.models import AuditSnapshot
+
+            client = get_client(tenant_id)
+            snap = AuditSnapshot(folder="", tenant_id=tenant_id or "default")
+            extract_ngfw_devices(client, snap)
+            if serial:
+                snap.ngfw_devices = [
+                    d
+                    for d in snap.ngfw_devices
+                    if (d.get("serial_number") or d.get("serial")) == serial
+                ]
+                if not snap.ngfw_devices:
+                    return f"Error: device serial {serial!r} not found via scm_ngfw_device_list."
+            extract_ngfw_interface_ips(client, snap)
+
+            result: dict[str, Any] = {
+                "total": len(snap.ngfw_interface_ips),
+                "interface_ips": snap.ngfw_interface_ips,
+            }
+            if not snap.ngfw_interface_ips:
+                result["note"] = (
+                    "No data returned — requires NGFW Operations entitlement, "
+                    "or no devices have L3-addressed interfaces."
+                )
+            return json.dumps(result, indent=2, default=str)
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_ngfw_wan_ip_summary', tenant_id=tenant_id)}"
+
 
 def _fmt_local_ts(ts: str) -> str:
     if not ts:

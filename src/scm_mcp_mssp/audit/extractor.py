@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import threading
+import time
 import warnings
+import xml.etree.ElementTree as ET
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from typing import Any
 
@@ -119,7 +122,37 @@ _REST_PATH_OVERRIDE: dict[str, str] = {
 }
 
 
+_SNAPSHOT_CACHE_TTL = 120  # seconds
+_snapshot_cache: dict[tuple[str, str, int], tuple[float, AuditSnapshot]] = {}
+_snapshot_cache_lock = threading.Lock()
+
+
 def extract_snapshot(client: Any, folder: str, tenant_id: str) -> AuditSnapshot:
+    """
+    Pull all auditable SCM config for a folder into an AuditSnapshot.
+
+    A single extraction fans out ~30 parallel API calls and can take a couple
+    of minutes on a large tenant. Several independent tools (BPA, NCSC/DSPT/
+    ISO27001 gap checks, decrypt-policy audit, tier assess/report, the AS-BUILT
+    report) each pull a snapshot for the same (tenant, folder); a short-TTL
+    cache lets a back-to-back compliance sweep reuse one extraction instead of
+    repeating the full API fan-out per tool.
+    """
+    cache_key = (tenant_id, folder, id(client))
+    now = time.monotonic()
+    with _snapshot_cache_lock:
+        cached = _snapshot_cache.get(cache_key)
+        if cached is not None and now - cached[0] < _SNAPSHOT_CACHE_TTL:
+            return cached[1]
+
+    snap = _extract_snapshot_uncached(client, folder, tenant_id)
+
+    with _snapshot_cache_lock:
+        _snapshot_cache[cache_key] = (now, snap)
+    return snap
+
+
+def _extract_snapshot_uncached(client: Any, folder: str, tenant_id: str) -> AuditSnapshot:
     """
     Pull all auditable SCM config for a folder into an AuditSnapshot.
 
@@ -239,7 +272,10 @@ def extract_snapshot(client: Any, folder: str, tenant_id: str) -> AuditSnapshot:
         seen_ids: set[str] = set()
         combined: list[dict[str, Any]] = []
         for f in _rule_folders:
-            for rule in _safe("security_rule", folder=f, position=position, limit=_LIMIT):
+            # SecurityRule.list()'s rulebase-selector kwarg is `rulebase`, not
+            # `position` — passing `position` is silently swallowed into **filters
+            # and always returns the default "pre" rulebase (see also security.py).
+            for rule in _safe("security_rule", folder=f, rulebase=position, limit=_LIMIT):
                 rid = rule.get("id") or rule.get("name", "")
                 if rid not in seen_ids:
                     seen_ids.add(rid)
@@ -1790,6 +1826,130 @@ def extract_ngfw_routing(client: Any, snap: Any) -> Any:
     return snap
 
 
+# NGFW Operations API — same prefix used by scm_ngfw_local_config_get (tools/adnsr.py).
+# 403 = TSG lacks the NGFW Operations entitlement; treated as best-effort, not fatal.
+_NGFW_OPS_BASE = "https://api.strata.paloaltonetworks.com/sse/config/v1"
+
+_IFACE_NAME_RE = re.compile(r"^(ethernet\d+/\d+|ae\d+|ha\d+)(\.\d+)?$")
+
+
+def parse_ngfw_interface_ips(xml_text: str) -> list[dict[str, Any]]:
+    """
+    Parse a PAN-OS running-config XML for physical/aggregate interface L3 addressing.
+
+    Best-effort: PAN-OS config trees vary by vsys/template-stack structure, so
+    this walks the whole tree for `<entry name="ethernetX/Y">` / `<entry
+    name="aeN">` nodes with a `<layer3>` child, rather than a single rigid
+    XPath tied to one vsys layout.
+
+    Note: this reflects *configuration*, not live operational state. A DHCP-
+    configured interface is reported with addressing="dhcp" but no IP — the
+    actual leased address isn't visible via this endpoint (there is no
+    NGFW equivalent of the SD-WAN interfaces_status API for that).
+    """
+    try:
+        # xml_text is our own tenant's running-config, fetched via an authenticated
+        # SCM session — not attacker-controlled, so XXE isn't a real risk here.
+        root = ET.fromstring(xml_text)  # noqa: S314  # nosec B314: trusted first-party API response
+    except ET.ParseError:
+        return []
+
+    # zone assignment can live under //vsys/entry/zone or shared/zone
+    iface_zone: dict[str, str] = {}
+    for zone_entry in root.iter("entry"):
+        zone_name = zone_entry.get("name")
+        layer3 = zone_entry.find("./network/layer3")
+        if not zone_name or layer3 is None:
+            continue
+        for member in layer3.findall("member"):
+            if member.text:
+                iface_zone[member.text.strip()] = zone_name
+
+    results: list[dict[str, Any]] = []
+    for entry in root.iter("entry"):
+        name = entry.get("name")
+        if not name or not _IFACE_NAME_RE.match(name):
+            continue
+        layer3 = entry.find("layer3")
+        if layer3 is None:
+            continue
+
+        addresses = [
+            ip_entry.get("name")
+            for ip_entry in layer3.findall("./ip/entry")
+            if ip_entry.get("name")
+        ]
+        addressing = "static" if addresses else ""
+        dhcp_block = layer3.find("dhcp-client")
+        if dhcp_block is not None and (dhcp_block.findtext("enable", "") or "").strip() == "yes":
+            addressing = "dhcp"
+
+        if not addressing:
+            continue  # no L3 addressing configured on this interface
+
+        results.append(
+            {
+                "interface": name,
+                "zone": iface_zone.get(name, ""),
+                "addressing": addressing,
+                "ip_addresses": addresses,
+            }
+        )
+    return results
+
+
+def extract_ngfw_interface_ips(client: Any, snap: AuditSnapshot) -> AuditSnapshot:
+    """
+    Best-effort extraction of NGFW managed-device interface IP addressing.
+
+    Fetches each device's running-config XML via the NGFW Operations API
+    (same endpoint as `scm_ngfw_local_config_get`) and parses it for
+    interface-level L3 addressing. Devices that 403/404 (no entitlement, or
+    device not yet synced) are skipped without aborting the rest.
+
+    Prerequisite: extract_ngfw_devices() must have run first.
+    """
+    session = getattr(client, "session", None)
+    if session is None or not snap.ngfw_devices:
+        return snap
+
+    results: list[dict[str, Any]] = []
+    for dev in snap.ngfw_devices:
+        serial = dev.get("serial_number") or dev.get("serial")
+        if not serial:
+            continue
+        try:
+            resp = session.get(
+                f"{_NGFW_OPS_BASE}/local-config/running",
+                params={"serial": serial},
+                timeout=(10, 30),
+            )
+            if resp.status_code in (403, 404):
+                continue
+            resp.raise_for_status()
+            ct = resp.headers.get("Content-Type", "")
+            xml_text = resp.text
+            if "xml" not in ct and not xml_text.strip().startswith("<?xml"):
+                data = resp.json()
+                dl_url = data.get("download-url") or data.get("url") or data.get("config_url")
+                if not dl_url:
+                    continue
+                xml_text = session.get(dl_url, timeout=(10, 60)).text
+        except Exception as exc:
+            snap.extraction_errors.append(f"ngfw_interface_ips[{serial}]: {exc}")
+            logger.debug("ngfw_interface_ips_failed", serial=serial, error=str(exc))
+            continue
+
+        for rec in parse_ngfw_interface_ips(xml_text):
+            rec["device_name"] = dev.get("name", serial)
+            rec["serial_number"] = serial
+            results.append(rec)
+
+    snap.ngfw_interface_ips = results
+    logger.info("ngfw_interface_ips_extracted", count=len(results))
+    return snap
+
+
 def extract_airs(client: Any, snap: Any) -> Any:
     """
     Fetch Prisma AIRS (AI Runtime Security) config via the management API.
@@ -2158,6 +2318,12 @@ def extract_sdwan_snapshot(sdwan_client: Any, snap: AuditSnapshot) -> AuditSnaps
             wan_ifaces.extend(ifaces)
     snap.sdwan_wan_interfaces = wan_ifaces
 
+    wan_ips, wan_ip_errors = extract_sdwan_wan_ips(
+        sdwan_client, snap.sdwan_sites, snap.sdwan_elements
+    )
+    snap.sdwan_wan_ips = wan_ips
+    snap.extraction_errors.extend(wan_ip_errors)
+
     # VPN overlay topology (direct REST — not in SDK)
     try:
         from ..audit.sdwan_topo import build_topology, topology_to_mermaid
@@ -2172,6 +2338,7 @@ def extract_sdwan_snapshot(sdwan_client: Any, snap: AuditSnapshot) -> AuditSnaps
             snap.sdwan_vpn_links,
             snap.sdwan_sites,
             snap.sdwan_wan_networks,
+            wan_ips=snap.sdwan_wan_ips,
         )
     except Exception as exc:
         snap.extraction_errors.append(f"sdwan_topology: {exc}")
@@ -2182,9 +2349,78 @@ def extract_sdwan_snapshot(sdwan_client: Any, snap: AuditSnapshot) -> AuditSnaps
         sites=len(snap.sdwan_sites),
         elements=len(snap.sdwan_elements),
         wan_interfaces=len(snap.sdwan_wan_interfaces),
+        wan_ips=len(snap.sdwan_wan_ips),
         vpn_links=len(snap.sdwan_vpn_links),
     )
     return snap
+
+
+def extract_sdwan_wan_ips(
+    sdwan_client: Any,
+    sites: list[dict[str, Any]],
+    elements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Resolve the live public/private WAN IP address bound to each SD-WAN
+    element's internet- or MPLS-facing interface.
+
+    Per element: GET interfaces (config) to find ports marked
+    used_for="public"/"private", then GET interfaces_status for just those
+    interfaces to read the live-bound ipv4_addresses — this works for both
+    statically-addressed and DHCP-assigned circuits (the config object alone
+    doesn't carry the DHCP-leased address).
+
+    Snapshot-independent (takes plain sites/elements lists) so both the full
+    audit extraction pipeline and the standalone `sdwan_*` MCP tools can share
+    it. Returns (wan_ip_records, error_strings) — never raises.
+    """
+    from ..auth.sdwan import safe_items
+
+    site_by_id = {s.get("id"): s for s in sites if s.get("id")}
+    wan_ips: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for elem in elements:
+        site_id = elem.get("site_id")
+        element_id = elem.get("id")
+        if not site_id or not element_id:
+            continue
+        try:
+            ifaces = safe_items(sdwan_client.get.interfaces(site_id=site_id, element_id=element_id))
+        except Exception as exc:
+            errors.append(f"sdwan_interfaces[{element_id}]: {exc}")
+            continue
+
+        for iface in ifaces:
+            used_for = iface.get("used_for")
+            iface_id = iface.get("id")
+            if used_for not in ("public", "private") or not iface_id:
+                continue
+            try:
+                status_items = safe_items(
+                    sdwan_client.get.interfaces_status(
+                        site_id=site_id, element_id=element_id, interface_id=iface_id
+                    )
+                )
+            except Exception as exc:
+                errors.append(f"sdwan_interfaces_status[{iface_id}]: {exc}")
+                continue
+            status = status_items[0] if status_items else {}
+            wan_ips.append(
+                {
+                    "site_id": site_id,
+                    "site_name": site_by_id.get(site_id, {}).get("name", site_id),
+                    "element_id": element_id,
+                    "element_name": elem.get("name", element_id),
+                    "interface_name": iface.get("name", ""),
+                    "used_for": used_for,
+                    "config_type": (iface.get("ipv4_config") or {}).get("type", ""),
+                    "operational_state": status.get("operational_state", ""),
+                    "ipv4_addresses": status.get("ipv4_addresses") or [],
+                    "ipv6_addresses": status.get("ipv6_addresses") or [],
+                }
+            )
+    return wan_ips, errors
 
 
 _SASE_IAM_BASE = "https://api.sase.paloaltonetworks.com/iam/v1"

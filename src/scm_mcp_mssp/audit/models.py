@@ -164,6 +164,13 @@ class AuditSnapshot:
         default_factory=list
     )  # resolved connection records
     sdwan_topology_mermaid: str = ""  # pre-built diagram
+    sdwan_wan_ips: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # live public/private WAN IPs per element interface
+
+    # NGFW managed-device WAN/internet-facing interface IPs (parsed from local
+    # running-config XML via the NGFW Operations API — best-effort, requires entitlement)
+    ngfw_interface_ips: list[dict[str, Any]] = field(default_factory=list)
 
     # Subscription licences (populated via Subscription Service API)
     licenses: list[dict[str, Any]] = field(default_factory=list)

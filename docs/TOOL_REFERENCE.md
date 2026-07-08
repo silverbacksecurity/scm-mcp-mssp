@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**108 tools** across 18 modules.
+**110 tools** across 18 modules.
 
 ## Table of Contents
 
@@ -437,7 +437,9 @@ List remote networks (branch/SD-WAN connections) in SCM.
 
 ```
 Args:
-    folder: SCM folder.
+    folder: SCM folder (unused — remote networks always live in the
+            fixed "Remote Networks" container; kept for interface
+            consistency with the other _list tools).
     tenant_id: SCM tenant ID.
     limit: Maximum results.
 ```
@@ -455,7 +457,7 @@ Fetch details for a single remote network.
 ```
 Args:
     name: Remote network name.
-    folder: SCM folder.
+    folder: SCM folder (unused — see scm_remote_network_list).
     tenant_id: SCM tenant ID.
 ```
 
@@ -1894,6 +1896,34 @@ Returns:
 | `site_id` | `str` | `''` |
 | `element_id` | `str` | `''` |
 
+### `sdwan_wan_ip_summary`
+
+Report the live public/private WAN IP address bound to each ION element.
+
+```
+For every element (or just those at `site_id` if given), inspects each
+interface marked used_for="public" or "private" in its config and reads
+the live-bound IP from the interface's operational status — this covers
+both static and DHCP-assigned WAN circuits, which the config object
+alone cannot show for DHCP.
+
+Use this to populate a WAN IP inventory table/diagram for AS-BUILT
+documentation, or to spot circuits that are down or missing an address.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Optional — limit to elements at this site.
+
+Returns:
+    JSON array of {site_name, element_name, interface_name, used_for,
+    operational_state, ipv4_addresses, ipv6_addresses} records.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+
 ### `sdwan_list_wan_networks`
 
 List Prisma SD-WAN WAN networks (ISP circuit definitions).
@@ -2604,6 +2634,34 @@ Args:
 | `serial` | `str` | `—` |
 | `version` | `str` | `'running'` |
 | `tenant_id` | `str` | `''` |
+
+### `scm_ngfw_wan_ip_summary`
+
+Report configured WAN/internet-facing interface IP addresses for NGFW devices.
+
+```
+For each SCM-managed NGFW device (or just `serial` if given), fetches its
+running-config via the NGFW Operations API and parses physical/aggregate
+interfaces (ethernetX/Y, aeN) that have Layer 3 addressing, along with
+their assigned security zone.
+
+Use this to populate a WAN IP inventory table for AS-BUILT documentation.
+Note: this reflects **configuration**, not live operational state — a
+DHCP-configured interface is reported with addressing="dhcp" but no IP,
+since (unlike Prisma SD-WAN) there is no live-lease-status endpoint for
+NGFW interfaces.
+
+**Requires NGFW Operations entitlement** on the TSG.
+
+Args:
+    tenant_id: SCM tenant ID. Defaults to active tenant.
+    serial: Optional — limit to a single device serial number.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `serial` | `str` | `''` |
 
 ---
 
