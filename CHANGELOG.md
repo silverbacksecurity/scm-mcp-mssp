@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-09
+
+### Added
+- **`sdwan_wan_ip_summary`** / **`scm_ngfw_wan_ip_summary`** — live public/private WAN IP address per SD-WAN ION element interface, and NGFW interface IPs parsed from running-config XML (`tools/sdwan.py`, `tools/adnsr.py`)
+- **AS-BUILT report** — SD-WAN WAN IP table (§4.2.1) with an IP-annotated topology diagram, and an NGFW WAN IP table (§3.4.7) (`audit/asbuilt_report.py`)
+
+### Fixed
+Found via a live sweep of all read-only tools across 8 tenants:
+- **`security_rule.list()`'s rulebase kwarg is `rulebase`, not `position`** — 5 call sites, including the core audit extractor, silently ignored it, so every post-rulebase security rule was missing from every BPA/NCSC/ISO 27001/audit report
+- **16 tools passed a dead `limit=` kwarg** into `pan-scm-sdk` `.list()` calls (silently swallowed into `**filters`) — always fetched the full result set regardless of the requested limit; now sliced client-side
+- **`scm_remote_network_list`/`get` always 400'd** — the API requires `folder` to be literally `"Remote Networks"`, not the caller's folder
+- **`sdwan_list_elements(site_id=...)` crashed** — the SDK method has no such kwarg
+- **Cross-tenant dashboards** (`scm_incident_summary`/`search`) aborted entirely if one tenant had bad credentials instead of degrading per-tenant
+- **`handle_scm_exception()` lost real error text for `APIError`** — its `__str__` omits `.message` when `details`/`status`/`error_code` are all unset
+
+### Changed
+- **`extract_snapshot()` now cached 120s per (tenant, folder)** — 8+ report tools each independently re-ran the same ~2 min / ~30-call extraction back-to-back
+- Consolidated 3 duplicate tenant-config loaders and 6 duplicate `_fmt` JSON-formatting helpers into shared utils
+- `docs/TOOL_REFERENCE.md` updated for the new tools
+
 ## [0.8.0] - 2026-07-04
 
 ### Added
