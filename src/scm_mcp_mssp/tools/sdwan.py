@@ -260,12 +260,17 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     continue
                 status = status_items[0] if status_items else {}
                 public_ip = status.get("config_and_events_from") or ""
+                # SD-WAN parks unclaimed/unassigned elements under site_id "1"
+                elem_site_id = elem.get("site_id")
+                site_name = (
+                    "(unassigned)"
+                    if elem_site_id == "1"
+                    else site_by_id.get(elem_site_id, {}).get("name", elem_site_id)
+                )
                 detected.append(
                     {
-                        "site_id": elem.get("site_id"),
-                        "site_name": site_by_id.get(elem.get("site_id"), {}).get(
-                            "name", elem.get("site_id")
-                        ),
+                        "site_id": elem_site_id,
+                        "site_name": site_name,
                         "element_id": eid,
                         "element_name": elem.get("name", eid),
                         "connected": elem.get("connected"),
