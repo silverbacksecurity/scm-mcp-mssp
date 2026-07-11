@@ -36,6 +36,7 @@ _RELOAD_ORDER = [
     # Utilities (no intra-package deps)
     "scm_mcp_mssp.utils.logging",
     "scm_mcp_mssp.utils.errors",
+    "scm_mcp_mssp.utils.ipenrich",
     # NOTE: config.settings is intentionally excluded.  Reloading it creates a
     # new TenantConfig class object; existing cached instances (auth.oauth._tenant_configs)
     # are then instances of the OLD class and fail isinstance() checks in auth modules.

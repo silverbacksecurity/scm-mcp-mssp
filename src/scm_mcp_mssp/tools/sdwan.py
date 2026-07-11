@@ -39,8 +39,9 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
     def sdwan_list_sites(tenant_id: str = "", site_id: str = "") -> str:
         """List Prisma SD-WAN sites (branches, data centres, hub sites).
 
-        Returns name, address, site type (branch/dc/hub), element count,
-        admin state, and WAN interface count for each site.
+        Returns name, address, geo location (latitude/longitude), site type
+        (branch/dc/hub), element count, admin state, and WAN interface count
+        for each site.
 
         Args:
             tenant_id: SCM tenant ID (MSSP mode).
@@ -59,6 +60,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     "name": s.get("name"),
                     "description": s.get("description", ""),
                     "address": s.get("address", {}),
+                    "location": s.get("location", {}),
                     "element_cluster_role": s.get("element_cluster_role"),
                     "service_binding": s.get("service_binding"),
                     "admin_state": s.get("admin_state"),
@@ -170,14 +172,36 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
     # ── WAN IP Summary ───────────────────────────────────────────────────────
 
     @mcp.tool()
-    def sdwan_wan_ip_summary(tenant_id: str = "", site_id: str = "") -> str:
+    def sdwan_wan_ip_summary(
+        tenant_id: str = "",
+        site_id: str = "",
+        enrich: bool = False,
+    ) -> str:
         """Report the live public/private WAN IP address bound to each ION element.
 
         For every element (or just those at `site_id` if given), inspects each
         interface marked used_for="public" or "private" in its config and reads
         the live-bound IP from the interface's operational status — this covers
         both static and DHCP-assigned WAN circuits, which the config object
-        alone cannot show for DHCP.
+        alone cannot show for DHCP. Each record carries the site's configured
+        street address and geo location (latitude/longitude).
+
+        Also reports each element's **detected public IP** (`detected_public_ips`
+        section): the post-NAT source address the cloud controller sees the
+        ION's config/events connection arriving from (element status
+        `config_and_events_from`). For branches whose WAN interface holds an
+        RFC1918 address behind an upstream NAT, this is the real public egress
+        IP — no on-device lookup needed. Caveat: it reflects the circuit the
+        controller connection rides (normally the primary internet circuit),
+        so a multi-WAN branch shows one NAT IP, not one per circuit.
+
+        With enrich=true, each public WAN IP and detected public IP is
+        additionally looked up against an external IP-intelligence provider
+        (whatsmyip-style reverse lookup: ISP, organisation, ASN, reverse DNS,
+        and IP geolocation) so circuit provider and location can be verified
+        against what is configured. Note this sends the tenant's public IPs
+        to a third-party service (`ip_enrichment_provider` in settings,
+        default ip-api.com) — hence opt-in, never on by default.
 
         Use this to populate a WAN IP inventory table/diagram for AS-BUILT
         documentation, or to spot circuits that are down or missing an address.
@@ -185,10 +209,14 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
         Args:
             tenant_id: SCM tenant ID (MSSP mode).
             site_id: Optional — limit to elements at this site.
+            enrich: Look up ISP/ASN/rDNS/geo for each public WAN IP.
 
         Returns:
-            JSON array of {site_name, element_name, interface_name, used_for,
-            operational_state, ipv4_addresses, ipv6_addresses} records.
+            JSON with `wan_ips` records ({site_name, site_address, site_location,
+            element_name, interface_name, used_for, operational_state,
+            ipv4_addresses, ipv6_addresses[, enrichment]}) and
+            `detected_public_ips` ({site_name, element_name, detected_public_ip,
+            connected[, enrichment]}).
         """
         try:
             from ..audit.extractor import extract_sdwan_wan_ips
@@ -201,7 +229,80 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                 elements = [e for e in elements if e.get("site_id") == site_id]
 
             wan_ips, errors = extract_sdwan_wan_ips(sdk, sites, elements)
-            result: dict[str, Any] = {"total": len(wan_ips), "wan_ips": wan_ips}
+
+            site_geo = {
+                s.get("id"): {
+                    "address": s.get("address") or {},
+                    "location": s.get("location") or {},
+                }
+                for s in sites
+                if s.get("id")
+            }
+            for rec in wan_ips:
+                geo = site_geo.get(rec.get("site_id"), {})
+                rec["site_address"] = geo.get("address", {})
+                rec["site_location"] = geo.get("location", {})
+
+            # Post-NAT public IP per element, as seen by the cloud controller
+            # (element status `config_and_events_from`). The only API-visible
+            # source when the WAN interface itself holds an RFC1918 address
+            # behind upstream NAT — there is no remote-exec on IONs.
+            site_by_id = {s.get("id"): s for s in sites if s.get("id")}
+            detected: list[dict[str, Any]] = []
+            for elem in elements:
+                eid = elem.get("id")
+                if not eid:
+                    continue
+                try:
+                    status_items = safe_items(sdk.get.element_status(element_id=eid))
+                except Exception as exc:
+                    errors.append(f"sdwan_element_status[{eid}]: {exc}")
+                    continue
+                status = status_items[0] if status_items else {}
+                public_ip = status.get("config_and_events_from") or ""
+                detected.append(
+                    {
+                        "site_id": elem.get("site_id"),
+                        "site_name": site_by_id.get(elem.get("site_id"), {}).get(
+                            "name", elem.get("site_id")
+                        ),
+                        "element_id": eid,
+                        "element_name": elem.get("name", eid),
+                        "connected": elem.get("connected"),
+                        "detected_public_ip": public_ip,
+                    }
+                )
+
+            if enrich:
+                from ..utils.ipenrich import enrich_public_ips, global_ips
+
+                candidates = [
+                    ip
+                    for rec in wan_ips
+                    for ip in (rec.get("ipv4_addresses") or []) + (rec.get("ipv6_addresses") or [])
+                ] + [d["detected_public_ip"] for d in detected]
+                by_ip, enrich_warnings = enrich_public_ips(candidates)
+                for rec in wan_ips:
+                    matches = [
+                        by_ip[ip]
+                        for ip in global_ips(
+                            (rec.get("ipv4_addresses") or []) + (rec.get("ipv6_addresses") or [])
+                        )
+                        if ip in by_ip
+                    ]
+                    if matches:
+                        rec["enrichment"] = matches
+                for d in detected:
+                    hits = global_ips([d["detected_public_ip"]])
+                    if hits and hits[0] in by_ip:
+                        d["enrichment"] = by_ip[hits[0]]
+                errors = errors + [f"enrichment: {w}" for w in enrich_warnings]
+
+            result: dict[str, Any] = {
+                "total": len(wan_ips),
+                "wan_ips": wan_ips,
+                "detected_public_ips": detected,
+            }
             if errors:
                 result["warnings"] = errors
             return _fmt(result)

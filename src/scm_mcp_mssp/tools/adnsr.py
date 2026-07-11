@@ -390,13 +390,19 @@ def register_adnsr_tools(mcp: FastMCP, get_client: Any) -> None:
             return f"Error: {handle_scm_exception(exc, tool='scm_ngfw_local_config_get', tenant_id=tenant_id)}"
 
     @mcp.tool()
-    def scm_ngfw_wan_ip_summary(tenant_id: str = "", serial: str = "") -> str:
+    def scm_ngfw_wan_ip_summary(tenant_id: str = "", serial: str = "", enrich: bool = False) -> str:
         """Report configured WAN/internet-facing interface IP addresses for NGFW devices.
 
         For each SCM-managed NGFW device (or just `serial` if given), fetches its
         running-config via the NGFW Operations API and parses physical/aggregate
         interfaces (ethernetX/Y, aeN) that have Layer 3 addressing, along with
         their assigned security zone.
+
+        With enrich=true, each public interface IP is additionally looked up
+        against an external IP-intelligence provider (ISP, organisation, ASN,
+        reverse DNS, IP geolocation). Note this sends the tenant's public IPs
+        to a third-party service (`ip_enrichment_provider` in settings, default
+        ip-api.com) — hence opt-in, never on by default.
 
         Use this to populate a WAN IP inventory table for AS-BUILT documentation.
         Note: this reflects **configuration**, not live operational state — a
@@ -409,6 +415,7 @@ def register_adnsr_tools(mcp: FastMCP, get_client: Any) -> None:
         Args:
             tenant_id: SCM tenant ID. Defaults to active tenant.
             serial: Optional — limit to a single device serial number.
+            enrich: Look up ISP/ASN/rDNS/geo for each public interface IP.
         """
         try:
             from ..audit.extractor import extract_ngfw_devices, extract_ngfw_interface_ips
@@ -427,10 +434,27 @@ def register_adnsr_tools(mcp: FastMCP, get_client: Any) -> None:
                     return f"Error: device serial {serial!r} not found via scm_ngfw_device_list."
             extract_ngfw_interface_ips(client, snap)
 
+            enrich_warnings: list[str] = []
+            if enrich:
+                from ..utils.ipenrich import enrich_public_ips, global_ips
+
+                candidates = [
+                    ip for rec in snap.ngfw_interface_ips for ip in (rec.get("ip_addresses") or [])
+                ]
+                by_ip, enrich_warnings = enrich_public_ips(candidates)
+                for rec in snap.ngfw_interface_ips:
+                    matches = [
+                        by_ip[ip] for ip in global_ips(rec.get("ip_addresses") or []) if ip in by_ip
+                    ]
+                    if matches:
+                        rec["enrichment"] = matches
+
             result: dict[str, Any] = {
                 "total": len(snap.ngfw_interface_ips),
                 "interface_ips": snap.ngfw_interface_ips,
             }
+            if enrich_warnings:
+                result["warnings"] = [f"enrichment: {w}" for w in enrich_warnings]
             if not snap.ngfw_interface_ips:
                 result["note"] = (
                     "No data returned — requires NGFW Operations entitlement, "

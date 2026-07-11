@@ -22,9 +22,119 @@ do about it.
   (users / tenants / CIE roll-ups per region) and `scm_pab_msp_report`
   (per-TSG blocked malware / websites / extensions and category breakdowns)
   over the `sase/pab-msp` family (Feb 2026).
+- **Live WAN IP visibility** — `sdwan_wan_ip_summary` (public/private WAN IP
+  per SD-WAN element interface, DHCP-leased included) and
+  `scm_ngfw_wan_ip_summary` (NGFW interface IPs from running-config XML),
+  plus AS-BUILT WAN IP tables (§4.2.1 SD-WAN with IP-annotated topology,
+  §3.4.7 NGFW) — shipped 0.9.0.
+- **SD-WAN geo + WAN IP ISP enrichment (layers 1–2)** — site `location`
+  (lat/long) and full address surfaced in `sdwan_list_sites` and per-record
+  in `sdwan_wan_ip_summary`; opt-in `enrich=true` on both WAN IP tools does
+  a whatsmyip-style reverse lookup of each public IP (ISP, org, ASN, rDNS,
+  geolocation) via `utils/ipenrich.py` — provider-pluggable (ip-api.com
+  batch by default, ipinfo.io + token via `ip_enrichment_provider` /
+  `ipinfo_token` settings), 6 h in-process cache, additive-only (failures
+  degrade to warnings). Opt-in because it sends tenant public IPs to a
+  third-party service (2026-07-11).
+- **Detected post-NAT public IP per ION** — `sdwan_wan_ip_summary` now also
+  returns `detected_public_ips`: the source address the cloud controller
+  sees each element's config/events connection arriving from (element
+  status `config_and_events_from`). Solves the NAT-hidden-WAN-IP case —
+  live-validated: a lab branch holding an RFC1918 address on the wire
+  resolved to its real ISP egress IP/ASN — without any on-device access
+  (2026-07-11).
+- **Widened endpoint catalog** — `gen_endpoint_catalog.py` previously only
+  walked `openapi-specs/{sase,scm,access}`, three of ~19 top-level product
+  dirs in the same pan.dev monorepo. Added `sdwan`, `dlp`, `dns-security`,
+  `cloudngfw`, `cdl`, `email-dlp` (2026-07-09) — the adjacent security
+  products an MSSP managing SASE/SCM tenants also touches. Catalog grew from
+  1,593 endpoints / 23 families to **3,871 endpoints / 30 families**.
+  Deliberately still excluded: `openapi-specs/mssp` (Prisma *Cloud's* MSSP
+  backend — CSPM/CWPP tenant management, a different platform), and
+  `compute`/`cwpp`/`cspm`/`dspm`/`iot`/`prisma-airs*` (thousands of files,
+  different product lines entirely).
 
 ## Next
 
+_Last pan.dev check: 2026-07-09 — no new API family since the bundled catalog
+(`generated_at: 2026-07-03`). pan.dev's own changelog
+(`/sase/docs/release-notes/changelog/`) tops out at 2026-02-23 (Prisma Browser
+for MSP), and the last real content commit to `products/sase/api` was
+2026-03-06 (Config Orchestration RNHP docs) — both already shipped or listed
+below. `pan-scm-sdk` is current (`pyproject.toml` pins `>=0.15.1`, matching
+PyPI latest). The gap right now is entirely in catalog families we haven't
+built tools against yet, not in upstream drift._
+
+- **WAN IP enrichment layer 3: record + cross-check** — layers 1–2 (site
+  geo surfaced, opt-in `enrich=true` ISP/ASN/rDNS/geo lookup via
+  `utils/ipenrich.py`) shipped 2026-07-11; what remains: persist enrichment
+  per tenant (local JSON cache with a long TTL; ISP/geo rarely change, and
+  it keeps repeat AS-BUILT runs off third-party rate limits), add
+  ISP/ASN/geo columns to the AS-BUILT §4.2.1 SD-WAN and §3.4.7 NGFW WAN IP
+  tables, render a site map from the lat/long data (Mermaid has no map
+  primitive; likely an HTML/artifact map view), and flag drift: observed
+  ISP vs the circuit's configured WAN network label, and IP geolocation vs
+  the site's configured address (catches mis-patched or mis-documented
+  circuits).
+- **Branch NAT IP, PA side (IKE peer IP per circuit)** — the SD-WAN side is
+  done (see Recently shipped: element status `config_and_events_from` gives
+  the post-NAT egress of the circuit the controller connection rides, and
+  servicelink interface status exposes the full IKE/IPsec overlay state).
+  What it can't give is the branch's NAT IP *per circuit* — that's what
+  Prisma Access sees as the IKE peer on each RN tunnel. The right endpoint
+  is Insights `tunnels/tunnel_list` (already used by the compliance
+  snapshot), but every current service account gets HTTP 403 on it — same
+  RBAC class as the known `allocated_ips` 403 (view-only roles). Blocked on
+  a service account with an Insights/monitor read role; validate live, then
+  join PA-side peer IP to SD-WAN servicelinks by service_endpoint. No
+  remote-exec alternative exists: ION `toolkitsessions` endpoints are audit
+  records of interactive Device Toolkit sessions, not a run-a-command API,
+  and the SD-WAN events API 500s on bare queries (needs schema work).
+- **ADEM path enrichment (branch → DC hop counts)** — `access/adem` (13
+  paths, zero tooling) includes `/adem/telemetry/v2/measure/route/hops` —
+  per-hop network path telemetry from ADEM synthetic tests — plus
+  application/agent metric+score and internet-measure endpoints. Natural
+  third dimension on top of the WAN IP work: WAN IP summary says *what
+  circuit and ISP*, enrichment says *where and who*, ADEM route hops say
+  *how the path actually performs* (hop count, per-hop latency
+  branch → DC/app). Requires an ADEM-licensed tenant with agents/tests
+  enabled for live validation — same rule as SPI/5G: don't scaffold blind.
+- **Classic Prisma SD-WAN depth** — `sdwan/legacy` + `sdwan/unified`, 2,162
+  paths combined (45/44 files), newly catalogued. `sdwan.py` already has an
+  authenticated `prisma-sase` client wired up but only covers ~12 read-only
+  tools (sites, elements, WAN interfaces/networks, path groups, generic
+  policies, clusters, BGP, topology) — events/alerting, performance
+  monitoring, NAT/QoS/security-policy config, audit logs, and software
+  management are all untouched despite the client already sitting there.
+  Highest-leverage gap of anything on this list: no new auth/family to wire
+  up, just unbuilt tools against an existing session.
+- **Configuration Orchestration (site-based Remote Networks)** — `sase/config-orch`,
+  11 paths, **zero tooling**. Site + license workflow onboarding (the
+  partner-facing RNHP site model) complementing the existing per-RN tooling.
+- **5G Manage/Monitor** — `sase/manage-services-5g` (27 paths) +
+  `sase/monitor-services-5g` (20 paths), **zero tooling**. Refreshed Oct 2025 /
+  Feb 2026. Pick up when a 5G-enrolled tenant is available for live
+  validation (same pattern as SPI — don't scaffold blind against a spec with
+  no lab account to test 401/403 handling against).
+- **Multitenant Notifications** — `sase/mt-notifications`, 10 paths, **zero
+  tooling**. A tenant-level alert/notification feed is a natural NOC-dashboard
+  fit (proactive alerting rather than pull-based polling) and nothing else in
+  this roadmap depends on it, so it can be picked up independently.
+- **Aggregate monitoring expansion** — `sase/mt-monitor`, 36 paths; only the
+  alerts sub-resource is wired (`extract_mt_monitor_alerts`, used in
+  compliance snapshots). Application usage, bandwidth consumption, and user
+  analytics across tenants are unused — prime candidates for NOC dashboard
+  depth.
+- **Standalone SaaS posture tool** — `sase/sspm` (18 paths) +
+  `sase/identity-sspm` (17 paths) are currently only extracted into the
+  compliance snapshot (`extract_sspm`, `extract_identity_sspm`) for use inside
+  audit reports. There's no tool that surfaces SaaS app risk / identity
+  posture findings directly — worth a dedicated `scm_saas_posture`-style tool
+  rather than leaving it buried in compliance output.
+- **Insights 2.0 resource catalog** — `access/insights`, 103 paths across 7
+  spec files; only ~5 queries are hardcoded today (connected users v2/v3,
+  per-SPN throughput in `scm_spn_bandwidth`). Custom queries, scheduled
+  exports, and report downloads are unused.
 - **SPI in documents and dashboards** — AS-BUILT §3 SP Interconnect section
   (interconnects, VLAN attachments, IP pools) and an SPI health column in the
   NOC dashboard. Blocked on access to an SPI-enrolled MSP-mode service
@@ -32,19 +142,16 @@ do about it.
 - **PAB posture in tenant reporting** — PAB summary columns in
   `scm_tenant_dashboard`; PAB block-report evidence wired into Cyber
   Essentials / NCSC CAF browser-security controls.
-- **Configuration Orchestration (site-based Remote Networks)** — site +
-  license workflow onboarding tools from the `sase/config-orch` family
-  (Mar 2026); complements the existing per-RN tooling with the partner-facing
-  site model (RNHP).
-- **Aggregate monitoring expansion** — the `sase/mt-monitor` family is ~95%
-  untapped (application usage, bandwidth consumption, user analytics across
-  tenants); prime candidates for NOC dashboard depth.
-- **Insights 2.0 resource catalog** — custom queries, scheduled exports, and
-  report downloads (`access/insights`, ~100 endpoints unused).
-- **5G Manage/Monitor** — refreshed Feb 2026; pick up when 5G branches appear
-  in managed estates.
 - **Spec-schema request validation** — validate raw-REST query/body params
   against the OpenAPI schemas before calling (fewer opaque 400s).
+- **Newly catalogued small families — scope before building** — `dlp`
+  (standalone Enterprise DLP, 29 paths, includes a Beta Incidents API),
+  `dns-security` (standalone Advanced DNS Security, 2 paths), `cloudngfw/aws`
+  (Cloud NGFW-for-AWS marketplace API, 76 paths), `cdl/logforwarding` (6
+  paths), `email-dlp` (3 paths). These are different products/subscriptions
+  than SCM/SASE config — confirm a managed tenant actually holds the
+  entitlement before scaffolding tools, rather than building against specs
+  no lab account can exercise.
 
 ## How additions happen
 

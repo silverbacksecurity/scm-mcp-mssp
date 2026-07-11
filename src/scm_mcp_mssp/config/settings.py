@@ -127,6 +127,20 @@ class Settings(BaseSettings):
         description="Claude model ID to use for compliance advice generation.",
     )
 
+    # ── WAN IP enrichment ──────────────────────────────────────────────────
+    ip_enrichment_provider: str = Field(
+        "ip-api",
+        description=(
+            "IP-intelligence provider for WAN IP enrichment (enrich=true on "
+            "the WAN IP tools): 'ip-api' (ip-api.com free batch tier, no key, "
+            "HTTP-only) or 'ipinfo' (ipinfo.io, HTTPS, optional token)."
+        ),
+    )
+    ipinfo_token: SecretStr = Field(
+        SecretStr(""),
+        description="ipinfo.io API token — optional, raises rate limits and accuracy.",
+    )
+
     # ── MSSP ───────────────────────────────────────────────────────────────
     mssp_mode: bool = Field(
         False,

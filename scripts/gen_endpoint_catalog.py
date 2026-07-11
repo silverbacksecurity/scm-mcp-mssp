@@ -28,9 +28,28 @@ from pathlib import Path
 import yaml
 
 REPO_URL = "https://github.com/PaloAltoNetworks/pan.dev"
-# Product trees this server integrates with. openapi-specs/mssp is Prisma
-# Cloud's MSSP backend (different product) — deliberately excluded.
-TREES = ("openapi-specs/sase", "openapi-specs/scm", "openapi-specs/access")
+# Product trees this server integrates with: SASE/SCM plus the adjacent
+# security products an MSSP managing those tenants also touches (classic
+# Prisma SD-WAN, standalone DLP/DNS-Security, Cloud NGFW-for-AWS, CDL log
+# forwarding, email DLP).
+#
+# Deliberately excluded — real pan.dev product families, but different
+# platforms outside this server's SCM/SASE scope: openapi-specs/mssp (Prisma
+# *Cloud's* MSSP backend — CSPM/CWPP tenant management, not Prisma SASE),
+# compute/cwpp/cspm/dspm (Prisma Cloud workload & posture — thousands of
+# files), iot (IoT Security), prisma-airs* (AI security), threat-vault,
+# action-plan, aiops-ngfw-bpa, code (docs-site tooling, not an API).
+TREES = (
+    "openapi-specs/sase",
+    "openapi-specs/scm",
+    "openapi-specs/access",
+    "openapi-specs/sdwan",
+    "openapi-specs/dlp",
+    "openapi-specs/dns-security",
+    "openapi-specs/cloudngfw",
+    "openapi-specs/cdl",
+    "openapi-specs/email-dlp",
+)
 OUT_DEFAULT = (
     Path(__file__).parent.parent / "src" / "scm_mcp_mssp" / "resources" / "endpoint_catalog.json"
 )
@@ -97,7 +116,10 @@ def build_catalog(repo: Path) -> dict:
                 continue
             rel = str(f.relative_to(repo))
             parts = rel.split("/")
-            family = "/".join(parts[1:3])  # e.g. "sase/mt-interconnect"
+            # e.g. "sase/mt-interconnect"; falls back to just the top-level
+            # product dir when specs sit flat under it with no subfolder
+            # (e.g. "dlp/DataPatterns.yaml" -> family "dlp", not "dlp/DataPatterns.yaml")
+            family = "/".join(parts[1:3]) if len(parts) > 3 else parts[1]
             servers = doc.get("servers") or []
             base = str(servers[0].get("url", "")) if servers else ""
             paths = {
