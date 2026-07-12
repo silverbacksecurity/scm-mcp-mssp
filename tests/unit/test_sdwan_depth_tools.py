@@ -37,7 +37,16 @@ class FakeResp:
         return self._content
 
 
-SITES = [{"id": "s1", "name": "Branch-1"}, {"id": "s2", "name": "DC-1"}]
+SITES = [
+    {
+        "id": "s1",
+        "name": "Branch-1",
+        "element_cluster_role": "SPOKE",
+        "location": {"latitude": 51.5, "longitude": -0.12},
+        "address": {"city": "London", "country": "United Kingdom"},
+    },
+    {"id": "s2", "name": "DC-1"},  # no coordinates — must be skipped by the map
+]
 ELEMENTS = [
     {
         "id": "e1",
@@ -194,6 +203,10 @@ def make_fake_sdk(*, auditlog_status: int = 200) -> Any:
     get = SimpleNamespace(
         sites=lambda site_id=None: FakeResp(SITES),
         elements=lambda element_id=None: FakeResp(ELEMENTS),
+        wannetworks=lambda: FakeResp([{"id": "n1", "name": "BT-INET", "type": "publicwan"}]),
+        waninterfaces=lambda site_id=None: FakeResp(
+            [{"id": "swi1", "name": "Circuit-1", "network_id": "n1"}]
+        ),
         eventcodes=lambda: FakeResp(EVENTCODES),
         machines=lambda: FakeResp(MACHINES),
         software_status=lambda eid: FakeResp(SOFTWARE_STATUS),
@@ -336,6 +349,16 @@ def test_link_health_paths_and_stats(tools: dict[str, Any]) -> None:
     assert lat["path_id"] == "p1" and lat["remote_site"] == "DC-1"
     bw = data["bandwidth"][0]
     assert bw["metric"] == "BandwidthUsage" and bw["unit"] == "Mbps"
+
+
+def test_site_map_writes_html_and_skips_unlocated(tools: dict[str, Any], tmp_path: Any) -> None:
+    out = tmp_path / "map.html"
+    result = tools["sdwan_site_map"](tenant_id="t1", save_to=str(out))
+    assert "1 sites mapped" in result and "DC-1" in result  # skipped by name
+    html = out.read_text()
+    assert "Branch-1" in html and '"lat": 51.5' in html
+    assert "Circuit-1 (BT-INET)" in html
+    assert "leaflet" in html
 
 
 def test_link_health_caps_paths(tools: dict[str, Any]) -> None:

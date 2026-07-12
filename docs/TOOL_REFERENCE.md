@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**115 tools** across 18 modules.
+**116 tools** across 18 modules.
 
 ## Table of Contents
 
@@ -1031,6 +1031,13 @@ Args:
                       aggregate agent scores. Populates §7.1 with a scored
                       app table instead of the manual-input placeholder.
                       Uses the same SCM OAuth token — no extra credentials.
+    enrich_wan_ips:   If True, reverse-look-up each public WAN IP (ISP,
+                      ASN, geolocation) and add ISP/Geo/Drift columns to
+                      the §4.2.1 SD-WAN and §3.4.7 NGFW WAN IP tables.
+                      Sends tenant public IPs to the configured
+                      IP-intelligence provider (see ip_enrichment_provider
+                      setting) — opt-in for that reason. Results are
+                      disk-cached 30 days, so re-runs cost no lookups.
 
 Returns:
     Job ID string. Call scm_asbuilt_result(job_id) once extraction completes.
@@ -1049,6 +1056,7 @@ Returns:
 | `include_insights` | `bool` | `False` |
 | `insights_region` | `str` | `'eu'` |
 | `include_adem` | `bool` | `False` |
+| `enrich_wan_ips` | `bool` | `False` |
 
 ### `scm_asbuilt_result`
 
@@ -1924,7 +1932,12 @@ additionally looked up against an external IP-intelligence provider
 and IP geolocation) so circuit provider and location can be verified
 against what is configured. Note this sends the tenant's public IPs
 to a third-party service (`ip_enrichment_provider` in settings,
-default ip-api.com) — hence opt-in, never on by default.
+default ip-api.com) — hence opt-in, never on by default. Lookups are
+cached on disk for 30 days, so repeat runs stay off provider rate
+limits. Enriched records then get advisory `drift` flags: observed
+ISP vs the circuit's configured WAN network / circuit name
+(`wan_network`/`circuit_name`, both now on every record), and IP
+geolocation vs the site's configured coordinates (>500 km flags).
 
 Use this to populate a WAN IP inventory table/diagram for AS-BUILT
 documentation, or to spot circuits that are down or missing an address.
@@ -2106,6 +2119,38 @@ Returns:
 | Parameter | Type | Default |
 |-----------|------|---------|
 | `tenant_id` | `str` | `''` |
+
+### `sdwan_site_map`
+
+Generate an interactive HTML map of SD-WAN sites from their geo data.
+
+```
+Plots every site that has configured coordinates (see
+sdwan_list_sites `location`) on a Leaflet/OpenStreetMap map — DC/hub
+sites in red, branches in blue — with a popup per site showing its
+role, street address, ION elements (name, model, connected state),
+and WAN circuits. Complements the Mermaid topology diagram (which has
+no geographic layout) for AS-BUILT §4 and customer workshops.
+
+The generated file is standalone HTML but loads the Leaflet library
+and OSM map tiles from the internet when opened — tile requests
+reveal the mapped area to the tile server, so treat the file like
+the site list itself.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    save_to: Output path (default: sdwan-site-map-<tenant>.html in
+             the current directory).
+
+Returns:
+    Path of the written HTML file plus a summary of mapped/skipped
+    sites.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `save_to` | `str` | `''` |
 
 ### `sdwan_events`
 

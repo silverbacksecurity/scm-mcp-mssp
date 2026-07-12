@@ -2415,19 +2415,36 @@ class AsBuiltReportBuilder:
                 "`dhcp` addressing without the live-leased IP, since this endpoint reflects "
                 "configuration rather than live operational state._"
             )
+            enriched = any(rec.get("enrichment") for rec in snap.ngfw_interface_ips)
             rows = []
             for rec in snap.ngfw_interface_ips:
                 ips = ", ".join(rec.get("ip_addresses") or []) or "—"
-                rows.append(
-                    [
-                        rec.get("device_name") or _NA,
-                        rec.get("interface") or _NA,
-                        rec.get("zone") or "—",
-                        rec.get("addressing") or _NA,
-                        ips,
+                row = [
+                    rec.get("device_name") or _NA,
+                    rec.get("interface") or _NA,
+                    rec.get("zone") or "—",
+                    rec.get("addressing") or _NA,
+                    ips,
+                ]
+                if enriched:
+                    enr = rec.get("enrichment") or []
+                    row += [
+                        ", ".join(
+                            f"{e.get('isp') or e.get('org') or '—'} ({e.get('asn') or '—'})"
+                            for e in enr
+                        )
+                        or "—",
+                        ", ".join(
+                            ", ".join(filter(None, [e.get("city"), e.get("country")])) or "—"
+                            for e in enr
+                        )
+                        or "—",
                     ]
-                )
-            self._table(["Device", "Interface", "Zone", "Addressing", "IP Address(es)"], rows)
+                rows.append(row)
+            headers = ["Device", "Interface", "Zone", "Addressing", "IP Address(es)"]
+            if enriched:
+                headers += ["Observed ISP (ASN)", "IP Geolocation"]
+            self._table(headers, rows)
         else:
             self._note(
                 "No interface IP data returned. This requires the **NGFW Operations "
@@ -2791,37 +2808,67 @@ class AsBuiltReportBuilder:
                 "_Live-bound IP address per internet/MPLS-facing interface, read from "
                 "element interface status (covers both static and DHCP-assigned circuits)._"
             )
+            enriched = any(w.get("enrichment") for w in snap.sdwan_wan_ips)
             rows = []
+            drift_notes: list[str] = []
             for w in snap.sdwan_wan_ips:
                 v4 = ", ".join(w.get("ipv4_addresses") or []) or "—"
                 v6 = ", ".join(w.get("ipv6_addresses") or []) or "—"
                 state = w.get("operational_state") or _NA
                 state_icon = "✅" if state == "up" else ("❌" if state == "down" else "—")
-                rows.append(
-                    [
-                        w.get("site_name") or _NA,
-                        w.get("element_name") or _NA,
-                        w.get("interface_name") or _NA,
-                        w.get("used_for") or _NA,
-                        w.get("config_type") or _NA,
-                        f"{state_icon} {state}",
-                        v4,
-                        v6,
-                    ]
-                )
-            self._table(
-                [
-                    "Site",
-                    "Element",
-                    "Interface",
-                    "Used For",
-                    "Addressing",
-                    "State",
-                    "IPv4 Address(es)",
-                    "IPv6 Address(es)",
-                ],
-                rows,
-            )
+                circuit = w.get("wan_network") or w.get("circuit_name") or "—"
+                row = [
+                    w.get("site_name") or _NA,
+                    w.get("element_name") or _NA,
+                    w.get("interface_name") or _NA,
+                    w.get("used_for") or _NA,
+                    circuit,
+                    w.get("config_type") or _NA,
+                    f"{state_icon} {state}",
+                    v4,
+                    v6,
+                ]
+                if enriched:
+                    enr = w.get("enrichment") or []
+                    isp = (
+                        ", ".join(
+                            f"{e.get('isp') or e.get('org') or '—'} ({e.get('asn') or '—'})"
+                            for e in enr
+                        )
+                        or "—"
+                    )
+                    geo = (
+                        ", ".join(
+                            ", ".join(filter(None, [e.get("city"), e.get("country")])) or "—"
+                            for e in enr
+                        )
+                        or "—"
+                    )
+                    drift = w.get("drift") or []
+                    row += [isp, geo, "⚠️" if drift else "—"]
+                    for reason in drift:
+                        drift_notes.append(
+                            f"**{w.get('site_name')} / {w.get('interface_name')}** — {reason}"
+                        )
+                rows.append(row)
+            headers = [
+                "Site",
+                "Element",
+                "Interface",
+                "Used For",
+                "Circuit / WAN Network",
+                "Addressing",
+                "State",
+                "IPv4 Address(es)",
+                "IPv6 Address(es)",
+            ]
+            if enriched:
+                headers += ["Observed ISP (ASN)", "IP Geolocation", "Drift"]
+            self._table(headers, rows)
+            if drift_notes:
+                self._p("**Drift flags** _(advisory — verify circuit patching/labelling)_:")
+                for note in drift_notes:
+                    self._p(f"- ⚠️ {note}")
         else:
             self._note(
                 "No live WAN IP data returned. Either no interfaces are marked "

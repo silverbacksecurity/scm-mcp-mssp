@@ -125,3 +125,91 @@ class TestTopologyMermaidWanIps:
         sites = [{"id": "s1", "name": "Branch-1", "element_cluster_role": "spoke"}]
         diagram = topology_to_mermaid([], sites, [], wan_ips=None)
         assert "Branch-1" in diagram
+
+
+class TestAnnotateWanIpDrift:
+    def _rec(self, **over: object) -> dict:
+        base = {
+            "site_name": "Branch-1",
+            "interface_name": "1",
+            "wan_network": "BT-INET-1",
+            "circuit_name": "Branch-1 Internet",
+            "site_location": {"latitude": 51.5, "longitude": -0.12},
+            "enrichment": [
+                {
+                    "ip": "8.8.8.8",
+                    "isp": "BT Group",
+                    "org": "British Telecom",
+                    "as_name": "BTNET",
+                    "city": "London",
+                    "country": "United Kingdom",
+                    "latitude": 51.51,
+                    "longitude": -0.13,
+                }
+            ],
+        }
+        base.update(over)
+        return base
+
+    def test_matching_isp_and_geo_not_flagged(self) -> None:
+        from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
+
+        rec = self._rec()  # "bt" token matches, IP ~1 km from site
+        assert annotate_wan_ip_drift([rec]) == 0
+        assert "drift" not in rec
+
+    def test_isp_label_mismatch_flagged(self) -> None:
+        from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
+
+        rec = self._rec(wan_network="Vodafone-MPLS", circuit_name="")
+        assert annotate_wan_ip_drift([rec]) == 1
+        assert any("isp_label" in r for r in rec["drift"])
+
+    def test_geo_mismatch_flagged_beyond_500km(self) -> None:
+        from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
+
+        rec = self._rec(site_location={"latitude": 40.4, "longitude": -3.7})  # Madrid
+        assert annotate_wan_ip_drift([rec]) == 1
+        assert any("geo:" in r for r in rec["drift"])
+        assert any("km from the site" in r for r in rec["drift"])
+
+    def test_stopword_only_label_never_flags_isp(self) -> None:
+        from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
+
+        # "Internet" is a stopword — no meaningful tokens, so no isp_label flag
+        rec = self._rec(wan_network="Internet", circuit_name="")
+        assert annotate_wan_ip_drift([rec]) == 0
+
+    def test_unenriched_records_skipped(self) -> None:
+        from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
+
+        rec = self._rec(enrichment=[])
+        assert annotate_wan_ip_drift([rec]) == 0
+
+    def test_missing_site_location_skips_geo_check(self) -> None:
+        from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
+
+        rec = self._rec(site_location={})
+        assert annotate_wan_ip_drift([rec]) == 0
+
+
+class TestEnrichWanIpRecords:
+    def test_attaches_enrichment_by_field(self, monkeypatch: object) -> None:
+        import scm_mcp_mssp.utils.ipenrich as ipenrich
+        from scm_mcp_mssp.audit.extractor import enrich_wan_ip_records
+
+        def _fake_enrich(ips: object, provider: str = "", token: str = "") -> tuple[dict, list]:
+            return {"8.8.8.8": {"ip": "8.8.8.8", "isp": "Example"}}, ["one warning"]
+
+        monkeypatch.setattr(ipenrich, "enrich_public_ips", _fake_enrich)  # type: ignore[attr-defined]
+        records = [
+            {"ipv4_addresses": ["8.8.8.8/30"], "ipv6_addresses": []},
+            {"ipv4_addresses": ["10.0.0.1"], "ipv6_addresses": []},
+            {"detected_public_ip": "8.8.8.8"},
+        ]
+        warnings = enrich_wan_ip_records(records[:2], ("ipv4_addresses", "ipv6_addresses"))
+        warnings += enrich_wan_ip_records(records[2:], ("detected_public_ip",))
+        assert records[0]["enrichment"][0]["isp"] == "Example"
+        assert "enrichment" not in records[1]  # private IP → no match
+        assert records[2]["enrichment"][0]["ip"] == "8.8.8.8"
+        assert warnings == ["one warning", "one warning"]

@@ -16,15 +16,21 @@ Providers:
 
 Enrichment sends tenant public IPs to a third-party service, so it is
 opt-in per tool call (`enrich=true`) and never runs by default. Results are
-cached in-process for `_CACHE_TTL` so repeated report runs in one session
-don't re-hit provider rate limits.
+cached for `_CACHE_TTL` (30 days — ISP/geo assignments rarely change) and
+persisted to a local JSON file so repeated report runs — including AS-BUILT
+re-runs in fresh server processes — don't re-hit provider rate limits.
+Cache I/O failures degrade to in-process-only caching, never errors.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import json
+import os
+import threading
 import time
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -33,8 +39,53 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-_CACHE_TTL = 6 * 3600  # ISP/geo assignments rarely change
+_CACHE_TTL = 30 * 24 * 3600  # ISP/geo assignments rarely change
 _cache: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_cache_lock = threading.Lock()
+_disk_loaded = False
+
+
+def _cache_path() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "scm-mcp-mssp" / "ipenrich.json"
+
+
+def _load_disk_cache() -> None:
+    """Merge the persisted cache into memory, once per process."""
+    global _disk_loaded
+    if _disk_loaded:
+        return
+    _disk_loaded = True
+    try:
+        raw = json.loads(_cache_path().read_text())
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        logger.debug("ipenrich_cache_load_failed", error=str(exc))
+        return
+    now = time.time()
+    for key, entry in raw.items():
+        provider, _, ip = key.partition("|")
+        ts = entry.get("ts", 0)
+        if ip and now - ts < _CACHE_TTL:
+            _cache.setdefault((provider, ip), (ts, entry.get("record", {})))
+
+
+def _save_disk_cache() -> None:
+    """Persist the in-memory cache atomically; failures are non-fatal."""
+    try:
+        path = _cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            f"{provider}|{ip}": {"ts": ts, "record": rec}
+            for (provider, ip), (ts, rec) in _cache.items()
+        }
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload))
+        tmp.replace(path)
+    except Exception as exc:
+        logger.debug("ipenrich_cache_save_failed", error=str(exc))
+
 
 _IP_API_FIELDS = "status,message,query,reverse,isp,org,as,asname,city,regionName,country,lat,lon"
 _IP_API_BATCH_URL = "http://ip-api.com/batch"
@@ -91,12 +142,14 @@ def enrich_public_ips(
     now = time.time()
     results: dict[str, dict[str, Any]] = {}
     misses: list[str] = []
-    for ip in targets:
-        hit = _cache.get((provider, ip))
-        if hit and now - hit[0] < _CACHE_TTL:
-            results[ip] = hit[1]
-        else:
-            misses.append(ip)
+    with _cache_lock:
+        _load_disk_cache()
+        for ip in targets:
+            hit = _cache.get((provider, ip))
+            if hit and now - hit[0] < _CACHE_TTL:
+                results[ip] = hit[1]
+            else:
+                misses.append(ip)
 
     warnings: list[str] = []
     if misses:
@@ -110,9 +163,12 @@ def enrich_public_ips(
         except Exception as exc:
             logger.debug("ip_enrichment_failed", provider=provider, error=str(exc))
             return results, [f"ip enrichment via {provider} failed: {exc}"]
-        for ip, rec in fetched.items():
-            _cache[(provider, ip)] = (now, rec)
-            results[ip] = rec
+        with _cache_lock:
+            for ip, rec in fetched.items():
+                _cache[(provider, ip)] = (now, rec)
+                results[ip] = rec
+            if fetched:
+                _save_disk_cache()
 
     return results, warnings
 

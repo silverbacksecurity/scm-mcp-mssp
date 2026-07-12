@@ -9,6 +9,18 @@ do about it.
 
 ## Recently shipped
 
+- **WAN IP enrichment layer 3 — record + cross-check** (2026-07-12) —
+  enrichment lookups persist in a 30-day local JSON cache (repeat AS-BUILT
+  runs cost zero third-party calls); every WAN IP record now resolves its
+  circuit (`circuit_name`/`wan_network` via interface → site WAN interface →
+  WAN network); advisory drift flags compare observed ISP vs the configured
+  circuit label (token overlap) and IP geolocation vs the site's configured
+  coordinates (>500 km) — a live lab run flagged 8/53 circuits whose
+  generic labels hid a shared BT egress; `scm_asbuilt_report` gained
+  `enrich_wan_ips` (ISP/ASN/geo/drift columns in §4.2.1 and §3.4.7); and
+  `sdwan_site_map` renders an interactive Leaflet/OSM HTML map from site
+  lat/long (sites without configured coordinates are listed as skipped —
+  12/16 in the main lab, which is also why geo-drift rarely fires there).
 - **Classic Prisma SD-WAN depth (round 1)** — 5 new read-only tools on the
   existing `prisma-sase` session, live-validated against a 16-site lab
   tenant (2026-07-12): `sdwan_events` (alarm/alert feed with event-code
@@ -78,17 +90,6 @@ below. `pan-scm-sdk` is current (`pyproject.toml` pins `>=0.15.1`, matching
 PyPI latest). The gap right now is entirely in catalog families we haven't
 built tools against yet, not in upstream drift._
 
-- **WAN IP enrichment layer 3: record + cross-check** — layers 1–2 (site
-  geo surfaced, opt-in `enrich=true` ISP/ASN/rDNS/geo lookup via
-  `utils/ipenrich.py`) shipped 2026-07-11; what remains: persist enrichment
-  per tenant (local JSON cache with a long TTL; ISP/geo rarely change, and
-  it keeps repeat AS-BUILT runs off third-party rate limits), add
-  ISP/ASN/geo columns to the AS-BUILT §4.2.1 SD-WAN and §3.4.7 NGFW WAN IP
-  tables, render a site map from the lat/long data (Mermaid has no map
-  primitive; likely an HTML/artifact map view), and flag drift: observed
-  ISP vs the circuit's configured WAN network label, and IP geolocation vs
-  the site's configured address (catches mis-patched or mis-documented
-  circuits).
 - **Branch NAT IP, PA side (IKE peer IP per circuit)** — the SD-WAN side is
   done (see Recently shipped: element status `config_and_events_from` gives
   the post-NAT egress of the circuit the controller connection rides, and

@@ -2370,6 +2370,11 @@ def extract_sdwan_wan_ips(
     statically-addressed and DHCP-assigned circuits (the config object alone
     doesn't carry the DHCP-leased address).
 
+    Each record also resolves the circuit it belongs to: the interface's
+    site_wan_interface_ids → site WAN interface (`circuit_name`) → WAN
+    network (`wan_network`) — the configured ISP/circuit label that the
+    drift check compares against the observed ISP.
+
     Snapshot-independent (takes plain sites/elements lists) so both the full
     audit extraction pipeline and the standalone `sdwan_*` MCP tools can share
     it. Returns (wan_ip_records, error_strings) — never raises.
@@ -2379,6 +2384,32 @@ def extract_sdwan_wan_ips(
     site_by_id = {s.get("id"): s for s in sites if s.get("id")}
     wan_ips: list[dict[str, Any]] = []
     errors: list[str] = []
+
+    try:
+        network_names = {
+            n.get("id"): n.get("name", "") for n in safe_items(sdwan_client.get.wannetworks())
+        }
+    except Exception as exc:
+        network_names = {}
+        errors.append(f"sdwan_wannetworks: {exc}")
+    circuit_by_site: dict[str, dict[str, dict[str, Any]]] = {}
+
+    def _circuit(site_id: str, iface: dict[str, Any]) -> tuple[str, str]:
+        """Resolve (circuit_name, wan_network) for a WAN-facing interface."""
+        swi_ids = iface.get("site_wan_interface_ids") or []
+        if not swi_ids:
+            return "", ""
+        if site_id not in circuit_by_site:
+            try:
+                circuit_by_site[site_id] = {
+                    w.get("id"): w
+                    for w in safe_items(sdwan_client.get.waninterfaces(site_id=site_id))
+                }
+            except Exception as exc:
+                circuit_by_site[site_id] = {}
+                errors.append(f"sdwan_waninterfaces[{site_id}]: {exc}")
+        swi = circuit_by_site[site_id].get(swi_ids[0], {})
+        return swi.get("name", ""), network_names.get(swi.get("network_id"), "")
 
     for elem in elements:
         site_id = elem.get("site_id")
@@ -2406,6 +2437,7 @@ def extract_sdwan_wan_ips(
                 errors.append(f"sdwan_interfaces_status[{iface_id}]: {exc}")
                 continue
             status = status_items[0] if status_items else {}
+            circuit_name, wan_network = _circuit(site_id, iface)
             wan_ips.append(
                 {
                     "site_id": site_id,
@@ -2414,6 +2446,8 @@ def extract_sdwan_wan_ips(
                     "element_name": elem.get("name", element_id),
                     "interface_name": iface.get("name", ""),
                     "used_for": used_for,
+                    "circuit_name": circuit_name,
+                    "wan_network": wan_network,
                     "config_type": (iface.get("ipv4_config") or {}).get("type", ""),
                     "operational_state": status.get("operational_state", ""),
                     "ipv4_addresses": status.get("ipv4_addresses") or [],
@@ -2421,6 +2455,135 @@ def extract_sdwan_wan_ips(
                 }
             )
     return wan_ips, errors
+
+
+_DRIFT_GEO_KM = 500  # IP geolocation is city-accurate at best; be conservative
+_DRIFT_STOPWORDS = frozenset(
+    [
+        "internet",
+        "wan",
+        "broadband",
+        "circuit",
+        "fibre",
+        "fiber",
+        "mpls",
+        "lte",
+        "5g",
+        "public",
+        "private",
+        "primary",
+        "secondary",
+        "backup",
+        "link",
+        "network",
+        "isp",
+        "net",
+        "line",
+        "dia",
+    ]
+)
+
+
+def _drift_tokens(text: str) -> set[str]:
+    import re as _re
+
+    return {
+        t
+        for t in _re.split(r"[^a-z0-9]+", text.lower())
+        if len(t) >= 2 and t not in _DRIFT_STOPWORDS
+    }
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    import math
+
+    rlat1, rlat2 = math.radians(lat1), math.radians(lat2)
+    dlat, dlon = rlat2 - rlat1, math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(rlat1) * math.cos(rlat2) * math.sin(dlon / 2) ** 2
+    return 2 * 6371 * math.asin(math.sqrt(a))
+
+
+def annotate_wan_ip_drift(wan_ips: list[dict[str, Any]]) -> int:
+    """Flag enriched WAN IP records whose observed ISP/geo contradicts config.
+
+    Two advisory checks per record that has `enrichment` attached:
+
+    - **isp_label**: no token overlap between the configured WAN network /
+      circuit name and the observed ISP/org/AS name — the circuit may be
+      patched or labelled wrong. Token-based, so it can false-positive on
+      labels that never mention the provider; it is a prompt to verify, not
+      a verdict.
+    - **geo**: IP geolocates > ~500 km from the site's configured
+      coordinates (needs `site_location` on the record) — solid signal the
+      address or the circuit documentation is wrong.
+
+    Mutates records in place (adds `drift: [reasons]`); returns the number
+    of records flagged. Never raises.
+    """
+    flagged = 0
+    for rec in wan_ips:
+        enrichments = rec.get("enrichment") or []
+        if isinstance(enrichments, dict):
+            enrichments = [enrichments]
+        if not enrichments:
+            continue
+        reasons: list[str] = []
+
+        label = " ".join(filter(None, [rec.get("wan_network"), rec.get("circuit_name")]))
+        label_tokens = _drift_tokens(label)
+        for enr in enrichments:
+            observed = " ".join(filter(None, [enr.get("isp"), enr.get("org"), enr.get("as_name")]))
+            if label_tokens and observed and not (label_tokens & _drift_tokens(observed)):
+                reasons.append(
+                    f"isp_label: configured circuit {label!r} vs observed ISP "
+                    f"{enr.get('isp') or enr.get('org')!r} ({enr.get('ip')}) share no "
+                    "name token — verify patching/labelling"
+                )
+
+            loc = rec.get("site_location") or {}
+            s_lat, s_lon = loc.get("latitude"), loc.get("longitude")
+            e_lat, e_lon = enr.get("latitude"), enr.get("longitude")
+            if None not in (s_lat, s_lon, e_lat, e_lon) and (s_lat, s_lon) != (0, 0):
+                km = _haversine_km(s_lat, s_lon, e_lat, e_lon)
+                if km > _DRIFT_GEO_KM:
+                    reasons.append(
+                        f"geo: {enr.get('ip')} geolocates to "
+                        f"{enr.get('city') or enr.get('country') or 'unknown'} "
+                        f"~{km:.0f} km from the site's configured location"
+                    )
+
+        if reasons:
+            rec["drift"] = reasons
+            flagged += 1
+    return flagged
+
+
+def enrich_wan_ip_records(records: list[dict[str, Any]], ip_fields: tuple[str, ...]) -> list[str]:
+    """Attach ISP/ASN/rDNS/geo enrichment to WAN IP-style records in place.
+
+    `ip_fields` names the record keys holding IP lists (or single strings).
+    Shared by `sdwan_wan_ip_summary` and the AS-BUILT enrichment pass so both
+    produce identically-shaped `enrichment` entries. Returns warnings.
+    """
+    from ..utils.ipenrich import enrich_public_ips, global_ips
+
+    def _ips(rec: dict[str, Any]) -> list[str]:
+        out: list[str] = []
+        for field in ip_fields:
+            value = rec.get(field)
+            if isinstance(value, str):
+                out.append(value)
+            elif isinstance(value, list):
+                out.extend(value)
+        return out
+
+    candidates = [ip for rec in records for ip in _ips(rec)]
+    by_ip, warnings = enrich_public_ips(candidates)
+    for rec in records:
+        matches = [by_ip[ip] for ip in global_ips(_ips(rec)) if ip in by_ip]
+        if matches:
+            rec["enrichment"] = matches
+    return warnings
 
 
 _SASE_IAM_BASE = "https://api.sase.paloaltonetworks.com/iam/v1"

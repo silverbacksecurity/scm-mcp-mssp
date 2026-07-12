@@ -19,6 +19,68 @@ from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Standalone Leaflet/OSM page; __SITES_JSON__ is replaced with the marker
+# data and __TITLE__ with the page title at generation time.
+_SITE_MAP_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #map { height: 100%; }
+  .legend { background: #fff; padding: 8px 12px; border-radius: 6px;
+            box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 13px; }
+  .legend .dot { display: inline-block; width: 10px; height: 10px;
+                 border-radius: 50%; margin-right: 6px; }
+  .popup h3 { margin: 0 0 4px; font-size: 14px; }
+  .popup ul { margin: 4px 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+const sites = __SITES_JSON__;
+const map = L.map("map");
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 18,
+  attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+const bounds = [];
+for (const s of sites) {
+  const isHub = ["HUB", "DC"].some((r) => (s.role || "").includes(r));
+  const color = isHub ? "#c0392b" : "#2471a3";
+  const m = L.circleMarker([s.lat, s.lon], {
+    radius: isHub ? 9 : 7, color, fillColor: color, fillOpacity: 0.85,
+  }).addTo(map);
+  const elems = s.elements.map(
+    (e) => `<li>${e.name} (${e.model}) ${e.connected ? "✅" : "❌"}</li>`
+  ).join("");
+  const circuits = s.circuits.map((c) => `<li>${c}</li>`).join("");
+  m.bindPopup(`<div class="popup"><h3>${s.name}</h3>
+    <em>${s.role || "branch"}</em><br>${s.address || ""}
+    ${elems ? "<b>Elements</b><ul>" + elems + "</ul>" : ""}
+    ${circuits ? "<b>Circuits</b><ul>" + circuits + "</ul>" : ""}</div>`);
+  m.bindTooltip(s.name);
+  bounds.push([s.lat, s.lon]);
+}
+map.fitBounds(bounds, { padding: [40, 40] });
+const legend = L.control({ position: "bottomleft" });
+legend.onAdd = () => {
+  const div = L.DomUtil.create("div", "legend");
+  div.innerHTML = `<span class="dot" style="background:#c0392b"></span>Hub / DC<br>
+                   <span class="dot" style="background:#2471a3"></span>Branch`;
+  return div;
+};
+legend.addTo(map);
+</script>
+</body>
+</html>
+"""
+
 
 def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
     """Register Prisma SD-WAN MCP tools."""
@@ -230,7 +292,12 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
         and IP geolocation) so circuit provider and location can be verified
         against what is configured. Note this sends the tenant's public IPs
         to a third-party service (`ip_enrichment_provider` in settings,
-        default ip-api.com) — hence opt-in, never on by default.
+        default ip-api.com) — hence opt-in, never on by default. Lookups are
+        cached on disk for 30 days, so repeat runs stay off provider rate
+        limits. Enriched records then get advisory `drift` flags: observed
+        ISP vs the circuit's configured WAN network / circuit name
+        (`wan_network`/`circuit_name`, both now on every record), and IP
+        geolocation vs the site's configured coordinates (>500 km flags).
 
         Use this to populate a WAN IP inventory table/diagram for AS-BUILT
         documentation, or to spot circuits that are down or missing an address.
@@ -307,36 +374,23 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     }
                 )
 
+            drift_flagged = 0
             if enrich:
-                from ..utils.ipenrich import enrich_public_ips, global_ips
+                from ..audit.extractor import annotate_wan_ip_drift, enrich_wan_ip_records
 
-                candidates = [
-                    ip
-                    for rec in wan_ips
-                    for ip in (rec.get("ipv4_addresses") or []) + (rec.get("ipv6_addresses") or [])
-                ] + [d["detected_public_ip"] for d in detected]
-                by_ip, enrich_warnings = enrich_public_ips(candidates)
-                for rec in wan_ips:
-                    matches = [
-                        by_ip[ip]
-                        for ip in global_ips(
-                            (rec.get("ipv4_addresses") or []) + (rec.get("ipv6_addresses") or [])
-                        )
-                        if ip in by_ip
-                    ]
-                    if matches:
-                        rec["enrichment"] = matches
-                for d in detected:
-                    hits = global_ips([d["detected_public_ip"]])
-                    if hits and hits[0] in by_ip:
-                        d["enrichment"] = by_ip[hits[0]]
+                enrich_warnings = enrich_wan_ip_records(
+                    wan_ips, ("ipv4_addresses", "ipv6_addresses")
+                ) + enrich_wan_ip_records(detected, ("detected_public_ip",))
                 errors = errors + [f"enrichment: {w}" for w in enrich_warnings]
+                drift_flagged = annotate_wan_ip_drift(wan_ips)
 
             result: dict[str, Any] = {
                 "total": len(wan_ips),
                 "wan_ips": wan_ips,
                 "detected_public_ips": detected,
             }
+            if drift_flagged:
+                result["drift_flagged"] = drift_flagged
             if errors:
                 result["warnings"] = errors
             return _fmt(result)
@@ -777,6 +831,113 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     "sites": site_inventory,
                 }
             )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Site Map (HTML) ───────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_site_map(tenant_id: str = "", save_to: str = "") -> str:
+        """Generate an interactive HTML map of SD-WAN sites from their geo data.
+
+        Plots every site that has configured coordinates (see
+        sdwan_list_sites `location`) on a Leaflet/OpenStreetMap map — DC/hub
+        sites in red, branches in blue — with a popup per site showing its
+        role, street address, ION elements (name, model, connected state),
+        and WAN circuits. Complements the Mermaid topology diagram (which has
+        no geographic layout) for AS-BUILT §4 and customer workshops.
+
+        The generated file is standalone HTML but loads the Leaflet library
+        and OSM map tiles from the internet when opened — tile requests
+        reveal the mapped area to the tile server, so treat the file like
+        the site list itself.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            save_to: Output path (default: sdwan-site-map-<tenant>.html in
+                     the current directory).
+
+        Returns:
+            Path of the written HTML file plus a summary of mapped/skipped
+            sites.
+        """
+        try:
+            import json as _json
+            from pathlib import Path
+
+            sdk = _sdwan(tenant_id)
+            sites = safe_items(sdk.get.sites())
+            elements = safe_items(sdk.get.elements())
+            networks = {n.get("id"): n.get("name", "") for n in safe_items(sdk.get.wannetworks())}
+
+            elems_by_site: dict[str, list[dict[str, Any]]] = {}
+            for e in elements:
+                elems_by_site.setdefault(e.get("site_id", ""), []).append(e)
+
+            markers: list[dict[str, Any]] = []
+            skipped: list[str] = []
+            for s in sites:
+                loc = s.get("location") or {}
+                lat, lon = loc.get("latitude"), loc.get("longitude")
+                if lat in (None, 0) and lon in (None, 0):
+                    skipped.append(s.get("name", s.get("id", "?")))
+                    continue
+                addr = s.get("address") or {}
+                addr_str = ", ".join(
+                    str(v)
+                    for v in (
+                        addr.get("street"),
+                        addr.get("city"),
+                        addr.get("post_code"),
+                        addr.get("country"),
+                    )
+                    if v
+                )
+                circuits: list[str] = []
+                try:
+                    for w in safe_items(sdk.get.waninterfaces(site_id=s.get("id"))):
+                        net = networks.get(w.get("network_id"), "")
+                        label = w.get("name", "")
+                        circuits.append(f"{label} ({net})" if net else label)
+                except Exception:  # noqa: S110 — map still renders without circuits
+                    pass
+                markers.append(
+                    {
+                        "name": s.get("name", ""),
+                        "role": (s.get("element_cluster_role") or "").upper(),
+                        "lat": lat,
+                        "lon": lon,
+                        "address": addr_str,
+                        "elements": [
+                            {
+                                "name": e.get("name") or e.get("id"),
+                                "model": e.get("model_name", ""),
+                                "connected": bool(e.get("connected")),
+                            }
+                            for e in elems_by_site.get(s.get("id", ""), [])
+                        ],
+                        "circuits": circuits,
+                    }
+                )
+
+            if not markers:
+                return (
+                    "No sites have configured coordinates — set each site's location "
+                    "in Strata Cloud Manager, or check sdwan_list_sites output."
+                )
+
+            tid = tenant_id or (list_loaded_tenants() or ["tenant"])[0]
+            out_path = Path(save_to or f"sdwan-site-map-{tid}.html")
+            title = f"Prisma SD-WAN Sites — {tid}"
+            html = _SITE_MAP_TEMPLATE.replace("__TITLE__", title).replace(
+                "__SITES_JSON__", _json.dumps(markers)
+            )
+            out_path.write_text(html)
+
+            summary = f"Site map written to {out_path} — {len(markers)} sites mapped"
+            if skipped:
+                summary += f", {len(skipped)} without coordinates skipped: {', '.join(skipped)}"
+            return summary
         except Exception as exc:
             return f"Error: {exc}"
 

@@ -1486,6 +1486,7 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
         include_insights: bool = False,
         insights_region: str = "eu",
         include_adem: bool = False,
+        enrich_wan_ips: bool = False,
     ) -> str:
         """Generate a full Prisma SASE AS-IS AS-BUILT document.
 
@@ -1548,6 +1549,13 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
                               aggregate agent scores. Populates §7.1 with a scored
                               app table instead of the manual-input placeholder.
                               Uses the same SCM OAuth token — no extra credentials.
+            enrich_wan_ips:   If True, reverse-look-up each public WAN IP (ISP,
+                              ASN, geolocation) and add ISP/Geo/Drift columns to
+                              the §4.2.1 SD-WAN and §3.4.7 NGFW WAN IP tables.
+                              Sends tenant public IPs to the configured
+                              IP-intelligence provider (see ip_enrichment_provider
+                              setting) — opt-in for that reason. Results are
+                              disk-cached 30 days, so re-runs cost no lookups.
 
         Returns:
             Job ID string. Call scm_asbuilt_result(job_id) once extraction completes.
@@ -1638,6 +1646,28 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
                     except Exception as exc:
                         snap.extraction_errors.append(f"sdwan_init: {exc}")
                         logger.warning("sdwan_init_failed", error=str(exc))
+
+                if enrich_wan_ips:
+                    try:
+                        from ..audit.extractor import (
+                            annotate_wan_ip_drift,
+                            enrich_wan_ip_records,
+                        )
+
+                        site_geo = {
+                            s.get("id"): (s.get("location") or {}) for s in snap.sdwan_sites
+                        }
+                        for rec in snap.sdwan_wan_ips:
+                            rec.setdefault("site_location", site_geo.get(rec.get("site_id")) or {})
+                        warns = enrich_wan_ip_records(
+                            snap.sdwan_wan_ips, ("ipv4_addresses", "ipv6_addresses")
+                        )
+                        warns += enrich_wan_ip_records(snap.ngfw_interface_ips, ("ip_addresses",))
+                        annotate_wan_ip_drift(snap.sdwan_wan_ips)
+                        snap.extraction_errors.extend(f"wan_ip_enrichment: {w}" for w in warns)
+                    except Exception as exc:
+                        snap.extraction_errors.append(f"wan_ip_enrichment: {exc}")
+                        logger.warning("wan_ip_enrichment_failed", error=str(exc))
 
                 _jobs: list[dict[str, Any]] = []
                 try:

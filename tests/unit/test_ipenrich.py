@@ -16,8 +16,10 @@ from scm_mcp_mssp.utils import ipenrich
 
 
 @pytest.fixture(autouse=True)
-def _clear_cache() -> None:
+def _clear_cache(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     ipenrich._cache.clear()
+    ipenrich._disk_loaded = False
+    monkeypatch.setattr(ipenrich, "_cache_path", lambda: tmp_path / "ipenrich.json")
 
 
 class TestGlobalIps:
@@ -132,6 +134,60 @@ class TestEnrichIpApi:
         by_ip, warnings = ipenrich.enrich_public_ips(["8.8.8.8"], provider="nonsense")
         assert by_ip == {}
         assert "nonsense" in warnings[0]
+
+
+class TestDiskCache:
+    def test_fetch_persists_and_new_process_reads_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ipenrich.requests, "post", lambda *a, **k: _Resp([_IP_API_ROW]))
+        ipenrich.enrich_public_ips(["8.8.8.8"], provider="ip-api")
+        assert ipenrich._cache_path().exists()
+
+        # simulate a fresh process: memory gone, disk remains
+        ipenrich._cache.clear()
+        ipenrich._disk_loaded = False
+
+        def _boom(*a: Any, **k: Any) -> Any:
+            raise AssertionError("should be served from disk cache")
+
+        monkeypatch.setattr(ipenrich.requests, "post", _boom)
+        by_ip, warnings = ipenrich.enrich_public_ips(["8.8.8.8"], provider="ip-api")
+        assert warnings == []
+        assert by_ip["8.8.8.8"]["asn"] == "AS64500"
+
+    def test_expired_disk_entry_refetched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import json as _json
+        import time as _time
+
+        stale = {
+            "ip-api|8.8.8.8": {
+                "ts": _time.time() - ipenrich._CACHE_TTL - 1,
+                "record": {"ip": "8.8.8.8", "asn": "AS-STALE"},
+            }
+        }
+        ipenrich._cache_path().write_text(_json.dumps(stale))
+        monkeypatch.setattr(ipenrich.requests, "post", lambda *a, **k: _Resp([_IP_API_ROW]))
+        by_ip, _ = ipenrich.enrich_public_ips(["8.8.8.8"], provider="ip-api")
+        assert by_ip["8.8.8.8"]["asn"] == "AS64500"
+
+    def test_corrupt_cache_file_degrades_silently(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ipenrich._cache_path().write_text("{not json")
+        monkeypatch.setattr(ipenrich.requests, "post", lambda *a, **k: _Resp([_IP_API_ROW]))
+        by_ip, warnings = ipenrich.enrich_public_ips(["8.8.8.8"], provider="ip-api")
+        assert warnings == []
+        assert by_ip["8.8.8.8"]["asn"] == "AS64500"
+
+    def test_providers_do_not_share_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ipenrich.requests, "post", lambda *a, **k: _Resp([_IP_API_ROW]))
+        ipenrich.enrich_public_ips(["8.8.8.8"], provider="ip-api")
+        calls: list[Any] = []
+
+        def _get(*a: Any, **k: Any) -> Any:
+            calls.append(a)
+            return _Resp({"ip": "8.8.8.8", "org": "AS1 X"})
+
+        monkeypatch.setattr(ipenrich.requests, "get", _get)
+        ipenrich.enrich_public_ips(["8.8.8.8"], provider="ipinfo")
+        assert len(calls) == 1  # ip-api entry must not satisfy ipinfo lookup
 
 
 class TestEnrichIpinfo:

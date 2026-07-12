@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **WAN IP enrichment layer 3 — record + cross-check** (`utils/ipenrich.py`, `audit/extractor.py`, `audit/asbuilt_report.py`, `tools/audit.py`, `tools/sdwan.py`):
+  - **Persistent enrichment cache** — lookups now survive server restarts via an atomic local JSON cache (`~/.cache/scm-mcp-mssp/ipenrich.json`, 30-day TTL, keyed provider+IP), so repeat AS-BUILT runs cost zero third-party lookups
+  - **Circuit resolution on every WAN IP record** — `extract_sdwan_wan_ips` now joins interface → site WAN interface → WAN network, adding `circuit_name` and `wan_network` to each record
+  - **Drift flags (advisory)** — enriched records are checked two ways: observed ISP vs the configured WAN network/circuit label (token overlap; catches mis-patched or mis-labelled circuits) and IP geolocation vs the site's configured coordinates (>500 km haversine). Live run flagged 8/53 lab circuits whose generic labels hid a shared BT egress
+  - **AS-BUILT enrichment columns** — new `enrich_wan_ips` opt-in on `scm_asbuilt_report` adds Observed ISP (ASN) / IP Geolocation / Drift columns to §4.2.1 (SD-WAN, plus per-flag notes) and §3.4.7 (NGFW); §4.2.1 also gains a Circuit / WAN Network column unconditionally
+  - **`sdwan_site_map`** — interactive Leaflet/OSM HTML map of SD-WAN sites from their configured coordinates (hubs/DCs red, branches blue; popups with address, IONs, circuits); sites without coordinates are listed as skipped
 - **Classic Prisma SD-WAN depth — 5 new tools** against the already-wired `prisma-sase` client, all live-validated on a 16-site lab tenant (`tools/sdwan.py`):
   - **`sdwan_events`** — alarm/alert feed (POST `events/query` v3.7) with severity/code/site filters, active-only mode, event codes resolved to display names via the tenant's event-code catalog, and a by-severity/by-code summary
   - **`sdwan_audit_logs`** — controller audit trail (who changed what); renders a clear RBAC hint on the HTTP 403 that view-only service accounts get
