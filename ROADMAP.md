@@ -9,6 +9,20 @@ do about it.
 
 ## Recently shipped
 
+- **Classic Prisma SD-WAN depth (round 2)** (2026-07-12) — three more
+  read-only tools over the monitor API, live-validated on the 16-site lab:
+  `sdwan_flows` (top talkers per site — sources/destinations/apps by bytes
+  with appdef name resolution, path-type split, dropped-flow count; the
+  flow monitor takes one site per request), `sdwan_app_health` (healthscore
+  buckets for sites/circuits/anynet links via `healthscore_type` +
+  `aggregation` — the payload schema the round-1 note flagged as unknown —
+  plus top-N apps/sites by 17 selectable bases via `monitor/topn`, and
+  per-app healthscore via `applicationsummary/query`), and
+  `sdwan_cellular_status` (module config joined to live status on
+  `cellular_module_id`: modem/SIM/signal/firmware per element). The CLI's
+  SD-WAN sub-menu also gained a MONITORING section exposing all of round
+  1 + 2 plus WAN IP summary and the site map, reusing the tool logic via
+  `_call_mcp_tool` (which now primes the tenant-config cache first).
 - **WAN IP enrichment layer 3 — record + cross-check** (2026-07-12) —
   enrichment lookups persist in a 30-day local JSON cache (repeat AS-BUILT
   runs cost zero third-party calls); every WAN IP record now resolves its
@@ -113,16 +127,16 @@ built tools against yet, not in upstream drift._
   *how the path actually performs* (hop count, per-hop latency
   branch → DC/app). Requires an ADEM-licensed tenant with agents/tests
   enabled for live validation — same rule as SPI/5G: don't scaffold blind.
-- **Classic Prisma SD-WAN depth (round 2)** — round 1 (2026-07-12, see
-  Recently shipped) covered events/alerting, audit logs, software
-  management, policy rules, and per-path link quality. Still unbuilt from
-  the 2,162-path `sdwan/legacy`+`sdwan/unified` families: flows
-  (`monitor/flows` — top talkers per site), app-level performance
-  (`monitor/aggregates` app QoS / healthscore — needs its own payload
-  schema: healthscore type + aggregate operator), cellular/5G module
-  status, IPFIX/SNMP config, event-correlation policy config, and
-  interface-level status sweeps. Audit log + software history remain 403
-  for current view-only service accounts — same blocker as Insights
+- **Classic Prisma SD-WAN depth (round 3)** — rounds 1–2 (2026-07-12, see
+  Recently shipped) covered events, audit logs, software, policy rules,
+  link quality, flows/top talkers, app healthscore/top-N, and cellular
+  module status. Still unbuilt from the 2,162-path
+  `sdwan/legacy`+`sdwan/unified` families: application QoS aggregates
+  (`monitor/aggregates/application/qos` — needs `filter.application_name`
+  + `AggregateMetric{name,statistic,unit}`; metric names undocumented,
+  probe live), interface-level status sweeps, IPFIX/SNMP config, and
+  event-correlation policy config. Audit log + software history remain
+  403 for current view-only service accounts — same blocker as Insights
   `tunnel_list`; revisit when a broader read role lands.
 - **Configuration Orchestration (site-based Remote Networks)** — `sase/config-orch`,
   11 paths, **zero tooling**. Site + license workflow onboarding (the

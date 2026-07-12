@@ -172,6 +172,76 @@ ANYNETLINKS = [
 ]
 
 
+APPDEFS = [
+    {"id": "app-dns", "display_name": "dns-base"},
+    {"id": "app-ssl", "display_name": "ssl"},
+]
+FLOW_ITEMS = [
+    {
+        "source_ip": "172.16.0.1",
+        "destination_ip": "8.8.8.8",
+        "destination_port": 53,
+        "app_id": "app-dns",
+        "bytes_c2s": 58,
+        "bytes_s2c": 100,
+        "flow_action": "flow_drop",
+        "path_type": "PrivateWAN",
+    },
+    {
+        "source_ip": "172.16.0.2",
+        "destination_ip": "1.1.1.1",
+        "destination_port": 443,
+        "app_id": "app-ssl",
+        "bytes_c2s": 5000,
+        "bytes_s2c": 90000,
+        "flow_action": "flow_allow",
+        "path_type": "DirectInternet",
+    },
+]
+CELLULAR_MODULES = [
+    {
+        "id": "cm1",
+        "name": "cwan1",
+        "element_id": "e1",
+        "radio_on": True,
+        "gps_enable": True,
+        "primary_sim": 1,
+    },
+    {
+        "id": "cm2",
+        "name": "cwan1",
+        "element_id": "e2",
+        "radio_on": False,
+        "gps_enable": False,
+        "primary_sim": 1,
+    },
+]
+CELLULAR_STATUS = [
+    {
+        "id": "cs1",
+        "cellular_module_id": "cm1",
+        "element_id": "e1",
+        "model_name": "EM7421",
+        "manufacturer": "Sierra Wireless",
+        "imei": "356281110210735",
+        "modem_state": "online",
+        "carrier": "EE",
+        "technology": "LTE",
+        "signal_strength_indicator": "excellent",
+        "network_registration_state": "registered",
+        "packet_service_state": "attached",
+        "activation_state": "activated",
+        "active_sim": 1,
+        "network_state": {"roaming": False},
+        "sim": [{"slot_number": 1, "present": True, "carrier": "EE", "pin_state": "disabled"}],
+        "firmware": [
+            {"fw_version": "01.14.03.00", "active": True},
+            {"fw_version": "01.09.00.00", "active": False},
+        ],
+    }
+]
+
+
 def monitor_body(name: str, unit: str, values: list[float]) -> dict[str, Any]:
     return {
         "metrics": [
@@ -227,7 +297,14 @@ def make_fake_sdk(*, auditlog_status: int = 200) -> Any:
         ),
         networkpolicyrules=lambda networkpolicyset_id: FakeResp([]),
         networkpolicysetstacks=lambda: FakeResp([]),
+        appdefs=lambda: FakeResp(APPDEFS),
     )
+
+    def monitor_topn(payload: dict[str, Any]) -> FakeResp:
+        kind = payload["top_n"]["type"]
+        items = ["app-ssl", "app-dns"] if kind == "app" else ["s1", "s2"]
+        return FakeResp(content={"top_n": {"type": kind, "items": items}})
+
     post = SimpleNamespace(
         events_query=lambda payload: FakeResp(
             content={"items": EVENTS, "total_count": len(EVENTS)}
@@ -241,6 +318,30 @@ def make_fake_sdk(*, auditlog_status: int = 200) -> Any:
         query_upgrade_status=lambda payload: FakeResp([{"id": "job1"}]),
         anynetlinks_query=lambda payload: FakeResp(ANYNETLINKS),
         monitor_metrics=monitor_metrics,
+        monitor_flows=lambda payload: FakeResp(content={"flows": {"items": FLOW_ITEMS}}),
+        monitor_aggregates_healthscore=lambda payload: FakeResp(
+            content={
+                "items": [
+                    {"health": "good", "count": 8, "data": []},
+                    {"health": "poor", "count": 1, "data": []},
+                ]
+            }
+        ),
+        monitor_topn=monitor_topn,
+        monitor_applicationsummary_query=lambda payload: FakeResp(
+            content={
+                "response": [
+                    {
+                        "app_id": "app-ssl",
+                        "application_healthscore_avg": 9.5,
+                        "site_id": "s1",
+                        "duration": "2026-07-12T00:00:00Z",
+                    }
+                ]
+            }
+        ),
+        cellular_modules_query=lambda payload: FakeResp(CELLULAR_MODULES),
+        cellular_modules_status_query=lambda payload: FakeResp(CELLULAR_STATUS),
     )
     return SimpleNamespace(get=get, post=post)
 
@@ -366,3 +467,73 @@ def test_link_health_caps_paths(tools: dict[str, Any]) -> None:
     assert data["total_paths"] == 2
     # admin-up path queried first, cap of 1 → only p1 in link_quality
     assert {r["path_id"] for r in data["link_quality"]} == {"p1"}
+
+
+# ── Round 2: flows / app health / cellular ──────────────────────────────────
+
+
+def test_flows_requires_site(tools: dict[str, Any]) -> None:
+    assert "site_id is required" in tools["sdwan_flows"]()
+
+
+def test_flows_top_talkers(tools: dict[str, Any]) -> None:
+    data = json.loads(tools["sdwan_flows"](site_id="s1"))
+    assert data["site_name"] == "Branch-1"
+    assert data["total_flows"] == 2
+    assert data["dropped_flows"] == 1
+    # ssl flow is 95000 bytes vs dns 158 — must rank first, name resolved
+    assert data["top_applications"][0] == {"key": "ssl", "flows": 1, "bytes": 95000}
+    assert data["top_sources"][0]["key"] == "172.16.0.2"
+    assert data["top_destinations"][0]["key"] == "1.1.1.1:443"
+    assert {p["key"] for p in data["path_types"]} == {"DirectInternet", "PrivateWAN"}
+
+
+def test_flows_top_cap(tools: dict[str, Any]) -> None:
+    data = json.loads(tools["sdwan_flows"](site_id="s1", top=1))
+    assert len(data["top_applications"]) == 1
+    assert len(data["top_destinations"]) == 1
+
+
+def test_app_health_buckets_and_topn(tools: dict[str, Any]) -> None:
+    data = json.loads(tools["sdwan_app_health"]())
+    assert data["healthscore"]["Site"] == {"good": 8, "poor": 1}
+    assert set(data["healthscore"]) == {"Site", "Circuit", "AnynetLink"}
+    assert [a["app"] for a in data["top_applications"]] == ["ssl", "dns-base"]
+    assert [s["site"] for s in data["top_sites"]] == ["Branch-1", "DC-1"]
+    assert data["app_healthscores"][0]["app"] == "ssl"
+    assert data["app_healthscores"][0]["healthscore_avg"] == 9.5
+    assert data["app_healthscores"][0]["site"] == "Branch-1"
+
+
+def test_app_health_site_scope_drops_top_sites(tools: dict[str, Any]) -> None:
+    data = json.loads(tools["sdwan_app_health"](site_id="s1"))
+    assert data["top_sites"] == []
+    assert data["top_applications"]
+
+
+def test_app_health_invalid_basis(tools: dict[str, Any]) -> None:
+    assert "basis must be one of" in tools["sdwan_app_health"](basis="bogus")
+
+
+def test_cellular_status_joins_config_and_status(tools: dict[str, Any]) -> None:
+    data = json.loads(tools["sdwan_cellular_status"]())
+    assert data["total"] == 2
+    m1 = next(m for m in data["modules"] if m["module_id"] == "cm1")
+    assert m1["element"] == "ion-1"
+    assert m1["site"] == "Branch-1"
+    assert m1["modem_state"] == "online"
+    assert m1["carrier"] == "EE"
+    assert m1["signal_strength"] == "excellent"
+    assert m1["roaming"] is False
+    assert m1["firmware"] == "01.14.03.00"  # active image only
+    assert m1["sims"] == [{"slot": 1, "present": True, "carrier": "EE", "pin_state": "disabled"}]
+    # module without a status record degrades to config-only fields
+    m2 = next(m for m in data["modules"] if m["module_id"] == "cm2")
+    assert m2["element"] == "ion-2"
+    assert m2["modem_state"] is None
+
+
+def test_cellular_status_element_filter(tools: dict[str, Any]) -> None:
+    data = json.loads(tools["sdwan_cellular_status"](element_id="e2"))
+    assert data["total"] == 1
+    assert data["modules"][0]["module_id"] == "cm2"

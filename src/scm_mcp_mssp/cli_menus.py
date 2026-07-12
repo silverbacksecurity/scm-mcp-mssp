@@ -34,6 +34,9 @@ def _call_mcp_tool(tenant: TenantConfig, register_fn: Any, tool_name: str, **kwa
     from .auth.oauth import get_scm_client
 
     mcp = FastMCP("cli-internal")
+    # Prime the per-tenant config cache: the SD-WAN tools resolve tenant_id
+    # through get_tenant_meta(), which is only populated by get_scm_client().
+    get_scm_client(tenant)
     register_fn(mcp, lambda tenant_id="": get_scm_client(tenant))
     tool = mcp._tool_manager.get_tool(tool_name)  # noqa: SLF001
     if tool is None:
@@ -333,6 +336,23 @@ def _menu_sdwan(
                     ("10", "Topology Summary", "Full topology summary"),
                     ("11", "Debug Topology", "Raw JSON from topology API"),
                     ("12", "Full Topology Report", "Interactive sub-menu (sites + diagram)"),
+                    ("13", "Site Map (HTML)", "Interactive Leaflet/OSM map from site geo data"),
+                ]
+            )
+        )
+        console.print()
+        _section("MONITORING")
+        console.print(
+            _menu_table(
+                [
+                    ("14", "Events", "Alarm/alert feed with severity summary"),
+                    ("15", "Software Status", "Per-ION versions + staged upgrade state"),
+                    ("16", "Link Health", "Per-path LQM latency/jitter/MOS for a site"),
+                    ("17", "Flows / Top Talkers", "Top sources, destinations, apps for a site"),
+                    ("18", "App Health", "Healthscore buckets + top-N apps and sites"),
+                    ("19", "Cellular Modules", "LTE/5G modem, SIM, and signal status"),
+                    ("20", "WAN IP Summary", "Public/private WAN IPs (optional ISP enrichment)"),
+                    ("21", "Audit Logs", "Operator/API audit trail (needs write role)"),
                 ]
             )
         )
@@ -369,6 +389,32 @@ def _menu_sdwan(
             _op_sdwan_debug_topology(tenant, console, _pause)
         elif choice == "12":
             _op_sdwan_topology(tenant)
+        elif choice == "13":
+            _op_sdwan_site_map(tenant, console, _pause)
+        elif choice == "14":
+            _op_sdwan_monitor(tenant, console, _pause, "sdwan_events", "Fetching events")
+        elif choice == "15":
+            _op_sdwan_monitor(
+                tenant, console, _pause, "sdwan_software_status", "Fetching software status"
+            )
+        elif choice == "16":
+            _op_sdwan_monitor(
+                tenant, console, _pause, "sdwan_link_health", "Querying link health", site=True
+            )
+        elif choice == "17":
+            _op_sdwan_monitor(
+                tenant, console, _pause, "sdwan_flows", "Aggregating flows", site=True
+            )
+        elif choice == "18":
+            _op_sdwan_monitor(tenant, console, _pause, "sdwan_app_health", "Querying app health")
+        elif choice == "19":
+            _op_sdwan_monitor(
+                tenant, console, _pause, "sdwan_cellular_status", "Querying cellular modules"
+            )
+        elif choice == "20":
+            _op_sdwan_wan_ip_summary(tenant, console, _pause)
+        elif choice == "21":
+            _op_sdwan_monitor(tenant, console, _pause, "sdwan_audit_logs", "Fetching audit logs")
 
 
 # ── sub-menu: SSE, DLP & CASB ─────────────────────────────────────────────
@@ -1495,6 +1541,74 @@ def _op_sdwan_debug_topology(tenant, console, _pause) -> None:
         console.print(json.dumps(data, indent=2)[:5000])
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
+    _pause()
+
+
+def _op_sdwan_monitor(
+    tenant, console, _pause, tool: str, status: str, *, site: bool = False
+) -> None:
+    """Generic runner for the JSON-returning SD-WAN monitoring tools."""
+    from .tools.sdwan import register_sdwan_tools
+
+    kwargs: dict[str, Any] = {"tenant_id": tenant.tenant_id}
+    if site:
+        site_id = Prompt.ask("Site ID (see Sites listing)", default="").strip()
+        if not site_id:
+            console.print("[yellow]Site ID is required for this view.[/yellow]")
+            _pause()
+            return
+        kwargs["site_id"] = site_id
+    with console.status(f"[cyan]{status}...[/cyan]"):
+        try:
+            result = _call_mcp_tool(tenant, register_sdwan_tools, tool, **kwargs)
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.lstrip().startswith(("{", "[")):
+        console.print_json(result)
+    else:
+        console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
+    _pause()
+
+
+def _op_sdwan_wan_ip_summary(tenant, console, _pause) -> None:
+    from .tools.sdwan import register_sdwan_tools
+
+    enrich = Prompt.ask("Enrich public IPs via ISP lookup? (y/N)", default="n").strip().lower()
+    with console.status("[cyan]Collecting WAN IPs...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_sdwan_tools,
+                "sdwan_wan_ip_summary",
+                tenant_id=tenant.tenant_id,
+                enrich=enrich in ("y", "yes"),
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.lstrip().startswith(("{", "[")):
+        console.print_json(result)
+    else:
+        console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
+    _pause()
+
+
+def _op_sdwan_site_map(tenant, console, _pause) -> None:
+    from .tools.sdwan import register_sdwan_tools
+
+    default = f"reports/sdwan-site-map-{tenant.tenant_id}.html"
+    save_to = Prompt.ask("Save map to", default=default).strip()
+    with console.status("[cyan]Building site map...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_sdwan_tools,
+                "sdwan_site_map",
+                tenant_id=tenant.tenant_id,
+                save_to=save_to,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
     _pause()
 
 

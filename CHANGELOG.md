@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Classic SD-WAN depth (round 2)** (`tools/sdwan.py`):
+  - **`sdwan_flows`** — top talkers per site from the flow log: top sources / destinations / applications by bytes (app IDs resolved via appdefs), per-path-type breakdown, and dropped-flow count. The flow monitor takes one site per request
+  - **`sdwan_app_health`** — healthscore buckets (good/fair/poor) for sites, circuits, and anynet links; top-N applications and sites by a selectable basis (traffic volume, TCP/UDP flows, transaction failures, or media metrics like egress audio MOS); per-app healthscore detail where app monitoring is enabled
+  - **`sdwan_cellular_status`** — LTE/5G module inventory joined to live status: modem state, carrier, technology, signal strength, per-slot SIM state, roaming, and active firmware, with element/site names resolved
+- **CLI: SD-WAN monitoring menu** (`cli_menus.py`) — the Prisma SD-WAN sub-menu gains a MONITORING section exposing events, software status, link health, flows/top talkers, app health, cellular modules, WAN IP summary (with optional ISP enrichment), audit logs, and the HTML site map — all reusing the tested MCP tool logic via `_call_mcp_tool`, which now primes the per-tenant config cache so SD-WAN tools resolve `tenant_id` correctly from the CLI
 - **WAN IP enrichment layer 3 — record + cross-check** (`utils/ipenrich.py`, `audit/extractor.py`, `audit/asbuilt_report.py`, `tools/audit.py`, `tools/sdwan.py`):
   - **Persistent enrichment cache** — lookups now survive server restarts via an atomic local JSON cache (`~/.cache/scm-mcp-mssp/ipenrich.json`, 30-day TTL, keyed provider+IP), so repeat AS-BUILT runs cost zero third-party lookups
   - **Circuit resolution on every WAN IP record** — `extract_sdwan_wan_ips` now joins interface → site WAN interface → WAN network, adding `circuit_name` and `wan_network` to each record

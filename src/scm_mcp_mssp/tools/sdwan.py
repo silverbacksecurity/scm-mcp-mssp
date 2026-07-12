@@ -1583,3 +1583,326 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
             return _fmt(result)
         except Exception as exc:
             return f"Error: {exc}"
+
+    def _app_names(sdk: Any) -> dict[str, str]:
+        """Return {appdef_id: display name} for resolving flow/top-N app IDs."""
+        return {
+            a.get("id"): a.get("display_name") or a.get("name") or a.get("id")
+            for a in safe_items(sdk.get.appdefs())
+        }
+
+    # ── Flows (top talkers) ───────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_flows(
+        tenant_id: str = "",
+        site_id: str = "",
+        hours: int = 1,
+        top: int = 10,
+        max_flows: int = 500,
+    ) -> str:
+        """Top talkers for a site from the SD-WAN flow log.
+
+        Queries the flow records the site's IONs reported over the last
+        `hours` hours and aggregates them client-side into top sources, top
+        destinations, and top applications by bytes, plus a per-path-type
+        byte breakdown and a count of dropped flows (flow_action=flow_drop).
+        Application IDs are resolved to display names via appdefs.
+
+        The flow monitor accepts exactly one site per request; an idle site
+        legitimately returns zero flows.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            site_id: Required — site to report on (see sdwan_list_sites).
+            hours: Look-back window in hours (default 1).
+            top: How many entries per top-talker list (default 10).
+            max_flows: Flow records to request from the API (default 500).
+
+        Returns:
+            JSON with `total_flows`, `dropped_flows`, `top_sources`,
+            `top_destinations`, `top_applications`, and `path_types`.
+        """
+        try:
+            if not site_id:
+                return "Error: site_id is required — use sdwan_list_sites to find site IDs"
+            sdk = _sdwan(tenant_id)
+            start_time, end_time = _window(hours)
+            resp = sdk.post.monitor_flows(
+                {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "filter": {"site": [site_id]},
+                    "debug_level": "all",
+                    "page_size": max_flows,
+                }
+            )
+            if not getattr(resp, "sdk_status", False):
+                return f"Error: {_api_error('monitor_flows', resp)}"
+            flows = ((resp.json() or {}).get("flows") or {}).get("items", [])
+            app_names = _app_names(sdk)
+            site_names, _ = _name_maps(sdk)
+
+            def _rank(key_fn: Any) -> list[dict[str, Any]]:
+                groups: dict[str, dict[str, int]] = {}
+                for f in flows:
+                    key = key_fn(f)
+                    g = groups.setdefault(key, {"flows": 0, "bytes": 0})
+                    g["flows"] += 1
+                    g["bytes"] += (f.get("bytes_c2s") or 0) + (f.get("bytes_s2c") or 0)
+                ranked = sorted(groups.items(), key=lambda kv: kv[1]["bytes"], reverse=True)
+                return [{"key": k, **v} for k, v in ranked[:top]]
+
+            result = {
+                "site_id": site_id,
+                "site_name": site_names.get(site_id, site_id),
+                "window_hours": hours,
+                "total_flows": len(flows),
+                "dropped_flows": sum(1 for f in flows if f.get("flow_action") == "flow_drop"),
+                "top_sources": _rank(lambda f: f.get("source_ip", "?")),
+                "top_destinations": _rank(
+                    lambda f: f"{f.get('destination_ip', '?')}:{f.get('destination_port', '')}"
+                ),
+                "top_applications": _rank(
+                    lambda f: app_names.get(f.get("app_id"), f.get("app_id") or "?")
+                ),
+                "path_types": _rank(lambda f: f.get("path_type") or "?"),
+            }
+            return _fmt(result)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Application health / top-N ────────────────────────────────────────────
+
+    _TOPN_BASES = (
+        "traffic_volume",
+        "transaction_failure",
+        "initiation_failure",
+        "tcp_flow",
+        "udp_flow",
+        "audio_traffic_volume",
+        "video_traffic_volume",
+        "ingress_audio_pkt_loss",
+        "egress_audio_pkt_loss",
+        "ingress_video_pkt_loss",
+        "egress_video_pkt_loss",
+        "ingress_audio_jitter",
+        "egress_audio_jitter",
+        "ingress_video_jitter",
+        "egress_video_jitter",
+        "ingress_audio_mos",
+        "egress_audio_mos",
+    )
+
+    @mcp.tool()
+    def sdwan_app_health(
+        tenant_id: str = "",
+        site_id: str = "",
+        hours: int = 24,
+        basis: str = "traffic_volume",
+    ) -> str:
+        """Tenant/site application health: healthscore buckets and top-N.
+
+        Reports three views over the last `hours` hours:
+        - `healthscore`: how many sites, circuits, and anynet links fall in
+          each health bucket (good/fair/poor/others).
+        - `top_applications`: top 10 apps by `basis` (default traffic
+          volume; media bases like egress_audio_mos target voice/video),
+          scoped to `site_id` when given, app IDs resolved to names.
+        - `top_sites`: top 10 sites by the same basis (tenant-wide view,
+          only included when site_id is not set).
+        Per-app healthscore detail is also queried; many tenants return no
+        datapoints unless app monitoring is enabled.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            site_id: Optional site to scope the top-apps view to.
+            hours: Look-back window in hours (default 24).
+            basis: Top-N ranking basis (traffic_volume, tcp_flow, udp_flow,
+                transaction_failure, or media bases like egress_audio_mos).
+
+        Returns:
+            JSON with `healthscore`, `top_applications`, `top_sites`, and
+            `app_healthscores`.
+        """
+        try:
+            if basis not in _TOPN_BASES:
+                return f"Error: basis must be one of {', '.join(_TOPN_BASES)}"
+            sdk = _sdwan(tenant_id)
+            start_time, end_time = _window(hours)
+            site_names, _ = _name_maps(sdk)
+            warnings: list[str] = []
+
+            healthscore: dict[str, dict[str, int]] = {}
+            for hs_type in ("Site", "Circuit", "AnynetLink"):
+                hs_resp = sdk.post.monitor_aggregates_healthscore(
+                    {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "healthscore_type": hs_type,
+                        "aggregation": "avg",
+                    }
+                )
+                if getattr(hs_resp, "sdk_status", False):
+                    healthscore[hs_type] = {
+                        item.get("health", "?"): item.get("count", 0)
+                        for item in (hs_resp.json() or {}).get("items", [])
+                    }
+                else:
+                    warnings.append(_api_error(f"healthscore[{hs_type}]", hs_resp))
+
+            def _topn(kind: str) -> list[str]:
+                tn_resp = sdk.post.monitor_topn(
+                    {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "topn_basis": basis,
+                        "top_n": {"type": kind, "limit": 10},
+                        "filter": {"site": [site_id]} if site_id and kind == "app" else {},
+                    }
+                )
+                if not getattr(tn_resp, "sdk_status", False):
+                    warnings.append(_api_error(f"topn[{kind}]", tn_resp))
+                    return []
+                return ((tn_resp.json() or {}).get("top_n") or {}).get("items", [])
+
+            app_names = _app_names(sdk)
+            top_apps = [{"app": app_names.get(a, a), "id": a} for a in _topn("app")]
+            top_sites = (
+                [] if site_id else [{"site": site_names.get(s, s), "id": s} for s in _topn("site")]
+            )
+
+            app_hs_resp = sdk.post.monitor_applicationsummary_query(
+                {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "interval": "1hour",
+                    "metrics": ["ApplicationHealthscore"],
+                    "view": "app",
+                    "filter": {"site": [site_id]} if site_id else {},
+                }
+            )
+            app_healthscores: list[dict[str, Any]] = []
+            if getattr(app_hs_resp, "sdk_status", False):
+                body = app_hs_resp.json() or {}
+                rows = body.get("response") if isinstance(body.get("response"), list) else []
+                app_healthscores = [
+                    {
+                        "app": app_names.get(r.get("app_id"), r.get("app_id")),
+                        "healthscore_avg": r.get("application_healthscore_avg"),
+                        "site": site_names.get(r.get("site_id"), r.get("site_id")),
+                        "duration": r.get("duration"),
+                    }
+                    for r in rows
+                ]
+            else:
+                warnings.append(_api_error("applicationsummary", app_hs_resp))
+
+            result: dict[str, Any] = {
+                "window_hours": hours,
+                "basis": basis,
+                "healthscore": healthscore,
+                "top_applications": top_apps,
+                "top_sites": top_sites,
+                "app_healthscores": app_healthscores,
+            }
+            if not app_healthscores:
+                result["app_healthscores_note"] = (
+                    "no per-app healthscore datapoints in the window — normal unless "
+                    "application monitoring/probes are enabled on the tenant"
+                )
+            if warnings:
+                result["warnings"] = warnings
+            return _fmt(result)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Cellular modules ──────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_cellular_status(tenant_id: str = "", element_id: str = "") -> str:
+        """Status of cellular (LTE/5G) modules across ION elements.
+
+        Joins each configured cellular module to its live status: modem
+        state, carrier, radio technology, signal strength, network/packet
+        registration, active SIM and per-slot SIM state, and active
+        firmware. Elements without cellular modules simply don't appear.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            element_id: Optional — only modules on this element.
+
+        Returns:
+            JSON array of cellular module objects with element/site names.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            cfg_resp = sdk.post.cellular_modules_query({})
+            if not getattr(cfg_resp, "sdk_status", False):
+                return f"Error: {_api_error('cellular_modules_query', cfg_resp)}"
+            status_resp = sdk.post.cellular_modules_status_query({})
+            status_by_module: dict[str, dict[str, Any]] = {}
+            warnings: list[str] = []
+            if getattr(status_resp, "sdk_status", False):
+                status_by_module = {
+                    s.get("cellular_module_id"): s
+                    for s in (status_resp.json() or {}).get("items", [])
+                }
+            else:
+                warnings.append(_api_error("cellular_modules_status_query", status_resp))
+
+            site_names, elem_names = _name_maps(sdk)
+            elem_sites = {
+                e.get("id"): site_names.get(e.get("site_id"), e.get("site_id"))
+                for e in safe_items(sdk.get.elements())
+            }
+
+            modules: list[dict[str, Any]] = []
+            for cfg in (cfg_resp.json() or {}).get("items", []):
+                eid = cfg.get("element_id")
+                if element_id and eid != element_id:
+                    continue
+                st = status_by_module.get(cfg.get("id"), {})
+                active_fw = next(
+                    (f.get("fw_version") for f in st.get("firmware", []) if f.get("active")),
+                    None,
+                )
+                modules.append(
+                    {
+                        "module_id": cfg.get("id"),
+                        "name": cfg.get("name"),
+                        "element": elem_names.get(eid, eid),
+                        "site": elem_sites.get(eid),
+                        "radio_on": cfg.get("radio_on"),
+                        "gps_enabled": cfg.get("gps_enable"),
+                        "primary_sim": cfg.get("primary_sim"),
+                        "model": st.get("model_name"),
+                        "manufacturer": st.get("manufacturer"),
+                        "imei": st.get("imei"),
+                        "modem_state": st.get("modem_state"),
+                        "carrier": st.get("carrier"),
+                        "technology": st.get("technology"),
+                        "signal_strength": st.get("signal_strength_indicator"),
+                        "network_registration": st.get("network_registration_state"),
+                        "packet_service": st.get("packet_service_state"),
+                        "activation_state": st.get("activation_state"),
+                        "roaming": (st.get("network_state") or {}).get("roaming"),
+                        "active_sim": st.get("active_sim"),
+                        "sims": [
+                            {
+                                "slot": s.get("slot_number"),
+                                "present": s.get("present"),
+                                "carrier": s.get("carrier"),
+                                "pin_state": s.get("pin_state"),
+                            }
+                            for s in st.get("sim", [])
+                        ],
+                        "firmware": active_fw,
+                    }
+                )
+            result: dict[str, Any] = {"total": len(modules), "modules": modules}
+            if warnings:
+                result["warnings"] = warnings
+            return _fmt(result)
+        except Exception as exc:
+            return f"Error: {exc}"

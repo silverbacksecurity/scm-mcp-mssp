@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**116 tools** across 18 modules.
+**119 tools** across 18 modules.
 
 ## Table of Contents
 
@@ -2325,6 +2325,98 @@ Returns:
 | `interval` | `str` | `'5min'` |
 | `include_bandwidth` | `bool` | `True` |
 | `max_paths` | `int` | `6` |
+
+### `sdwan_flows`
+
+Top talkers for a site from the SD-WAN flow log.
+
+```
+Queries the flow records the site's IONs reported over the last
+`hours` hours and aggregates them client-side into top sources, top
+destinations, and top applications by bytes, plus a per-path-type
+byte breakdown and a count of dropped flows (flow_action=flow_drop).
+Application IDs are resolved to display names via appdefs.
+
+The flow monitor accepts exactly one site per request; an idle site
+legitimately returns zero flows.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Required — site to report on (see sdwan_list_sites).
+    hours: Look-back window in hours (default 1).
+    top: How many entries per top-talker list (default 10).
+    max_flows: Flow records to request from the API (default 500).
+
+Returns:
+    JSON with `total_flows`, `dropped_flows`, `top_sources`,
+    `top_destinations`, `top_applications`, and `path_types`.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `hours` | `int` | `1` |
+| `top` | `int` | `10` |
+| `max_flows` | `int` | `500` |
+
+### `sdwan_app_health`
+
+Tenant/site application health: healthscore buckets and top-N.
+
+```
+Reports three views over the last `hours` hours:
+- `healthscore`: how many sites, circuits, and anynet links fall in
+  each health bucket (good/fair/poor/others).
+- `top_applications`: top 10 apps by `basis` (default traffic
+  volume; media bases like egress_audio_mos target voice/video),
+  scoped to `site_id` when given, app IDs resolved to names.
+- `top_sites`: top 10 sites by the same basis (tenant-wide view,
+  only included when site_id is not set).
+Per-app healthscore detail is also queried; many tenants return no
+datapoints unless app monitoring is enabled.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Optional site to scope the top-apps view to.
+    hours: Look-back window in hours (default 24).
+    basis: Top-N ranking basis (traffic_volume, tcp_flow, udp_flow,
+        transaction_failure, or media bases like egress_audio_mos).
+
+Returns:
+    JSON with `healthscore`, `top_applications`, `top_sites`, and
+    `app_healthscores`.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `hours` | `int` | `24` |
+| `basis` | `str` | `'traffic_volume'` |
+
+### `sdwan_cellular_status`
+
+Status of cellular (LTE/5G) modules across ION elements.
+
+```
+Joins each configured cellular module to its live status: modem
+state, carrier, radio technology, signal strength, network/packet
+registration, active SIM and per-slot SIM state, and active
+firmware. Elements without cellular modules simply don't appear.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    element_id: Optional — only modules on this element.
+
+Returns:
+    JSON array of cellular module objects with element/site names.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
 
 ---
 
