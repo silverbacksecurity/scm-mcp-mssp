@@ -7,6 +7,7 @@ All tools gracefully degrade if prisma-sase is not installed or auth fails.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -32,6 +33,33 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                 f"Tenant {tid!r} is not loaded. Check settings.toml and restart the server."
             )
         return get_sdwan_client(tc)
+
+    def _iso(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    def _window(hours: int) -> tuple[str, str]:
+        now = datetime.now(UTC)
+        return _iso(now - timedelta(hours=hours)), _iso(now)
+
+    def _api_error(label: str, resp: Any) -> str:
+        """Render a prisma-sase error response as a readable message."""
+        code = getattr(resp, "status_code", "?")
+        body = (getattr(resp, "text", "") or "")[:300]
+        if code == 403:
+            return (
+                f"{label}: HTTP 403 — the service account's role does not include "
+                "this permission (same RBAC class as the known allocated_ips 403; "
+                "needs a broader read role, e.g. Insights/monitor read)."
+            )
+        return f"{label}: HTTP {code} {body}".rstrip()
+
+    def _name_maps(sdk: Any) -> tuple[dict[str, str], dict[str, str]]:
+        """Return {site_id: name} and {element_id: name} lookup maps."""
+        site_names = {s.get("id"): s.get("name", s.get("id")) for s in safe_items(sdk.get.sites())}
+        elem_names = {
+            e.get("id"): e.get("name") or e.get("id") for e in safe_items(sdk.get.elements())
+        }
+        return site_names, elem_names
 
     # ── Sites ─────────────────────────────────────────────────────────────────
 
@@ -109,7 +137,8 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     "site_id": e.get("site_id"),
                     "model_name": e.get("model_name"),
                     "serial_number": e.get("serial_number"),
-                    "sw_version": e.get("sw_version"),
+                    # the elements API names this field software_version
+                    "sw_version": e.get("software_version") or e.get("sw_version"),
                     "hw_id": e.get("hw_id"),
                     "admin_state": e.get("admin_state"),
                     "connected": e.get("connected"),
@@ -709,7 +738,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                         "name": e.get("name"),
                         "model": e.get("model_name"),
                         "serial": e.get("serial_number"),
-                        "sw_version": e.get("sw_version"),
+                        "sw_version": e.get("software_version") or e.get("sw_version"),
                         "connected": e.get("connected"),
                         "role": e.get("role"),
                     }
@@ -748,5 +777,648 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     "sites": site_inventory,
                 }
             )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Events / Alarms ───────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_events(
+        tenant_id: str = "",
+        hours: int = 24,
+        category: str = "all",
+        severity: str = "",
+        site_id: str = "",
+        code: str = "",
+        include_cleared: bool = True,
+        max_events: int = 50,
+    ) -> str:
+        """List Prisma SD-WAN events (alarms and alerts) with a severity summary.
+
+        Queries the controller event feed (POST events/query) for the last
+        `hours` hours, newest first. Each event carries its event code,
+        human-readable display name and category (resolved from the tenant's
+        event-code catalog), severity, priority, cleared/acknowledged/standing
+        state, and the site and element it fired on.
+
+        The `summary` section counts events by severity and by code, and
+        highlights how many are still active (not cleared) — a quick NOC
+        health read without paging through the raw feed.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            hours: Look-back window in hours (default 24).
+            category: 'alarm', 'alert', or 'all'.
+            severity: Comma-separated filter, e.g. 'critical,major'.
+            site_id: Limit to events at this site.
+            code: Comma-separated event-code filter,
+                  e.g. 'DEVICEHW_INTERFACE_DOWN'.
+            include_cleared: Include events that have already cleared
+                             (set False for active-issues-only).
+            max_events: Maximum events to return (default 50).
+
+        Returns:
+            JSON with `summary` (counts by severity/code, active count) and
+            `events` (trimmed records, newest first).
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            start_time, end_time = _window(hours)
+
+            query: dict[str, Any] = {}
+            cat = category.lower()
+            query["type"] = ["alarm", "alert"] if cat == "all" else [cat]
+            if site_id:
+                query["site"] = [site_id]
+            if code:
+                query["code"] = [c.strip() for c in code.split(",") if c.strip()]
+
+            payload: dict[str, Any] = {
+                "limit": {
+                    "count": max(max_events, 1),
+                    "sort_on": "time",
+                    "sort_order": "descending",
+                },
+                "view": {"summary": False},
+                "severity": [s.strip() for s in severity.split(",") if s.strip()],
+                "query": query,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+            resp = sdk.post.events_query(payload)
+            if not getattr(resp, "sdk_status", False):
+                return f"Error: {_api_error('events_query', resp)}"
+            content = getattr(resp, "sdk_content", {}) or {}
+            events = list(content.get("items", []))
+            total_count = content.get("total_count")
+
+            if not include_cleared:
+                events = [e for e in events if not e.get("cleared")]
+
+            # Resolve event codes to display names and site/element IDs to names
+            code_meta = {
+                c.get("code"): c for c in safe_items(sdk.get.eventcodes()) if c.get("code")
+            }
+            site_names, elem_names = _name_maps(sdk)
+
+            by_severity: dict[str, int] = {}
+            by_code: dict[str, int] = {}
+            active = 0
+            trimmed: list[dict[str, Any]] = []
+            for e in events:
+                sev = e.get("severity", "unknown")
+                by_severity[sev] = by_severity.get(sev, 0) + 1
+                ecode = e.get("code", "unknown")
+                by_code[ecode] = by_code.get(ecode, 0) + 1
+                if not e.get("cleared"):
+                    active += 1
+                meta = code_meta.get(ecode, {})
+                trimmed.append(
+                    {
+                        "id": e.get("id"),
+                        "time": e.get("time"),
+                        "code": ecode,
+                        "display_name": meta.get("display_name", ecode),
+                        "event_category": meta.get("category"),
+                        "type": e.get("type"),
+                        "severity": sev,
+                        "priority": e.get("priority"),
+                        "cleared": e.get("cleared"),
+                        "acknowledged": e.get("acknowledged"),
+                        "standing": e.get("standing"),
+                        "site_name": site_names.get(e.get("site_id"), e.get("site_id")),
+                        "element_name": elem_names.get(e.get("element_id"), e.get("element_id")),
+                        "entity_ref": e.get("entity_ref"),
+                        "info": e.get("info"),
+                        "correlation_id": e.get("correlation_id"),
+                    }
+                )
+
+            return _fmt(
+                {
+                    "window_hours": hours,
+                    "summary": {
+                        "returned": len(trimmed),
+                        "total_in_window": total_count,
+                        "active_not_cleared": active,
+                        "by_severity": by_severity,
+                        "by_code": dict(
+                            sorted(by_code.items(), key=lambda kv: kv[1], reverse=True)
+                        ),
+                    },
+                    "events": trimmed,
+                }
+            )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Audit Log ─────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_audit_logs(tenant_id: str = "", hours: int = 24, limit: int = 50) -> str:
+        """List Prisma SD-WAN audit-log entries (who changed what, and when).
+
+        Queries the controller audit log (POST auditlog/query) for the last
+        `hours` hours, newest first. Each entry records the operator, the
+        request (method + resource URI), and the response code — the trail
+        for config-change forensics and compliance evidence.
+
+        Note: requires an audit-log read permission on the service account;
+        view-only roles typically get HTTP 403 (reported gracefully).
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            hours: Look-back window in hours (default 24).
+            limit: Maximum entries to return (default 50).
+
+        Returns:
+            JSON array of audit entries, or a clear RBAC message on 403.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            since_ms = int((datetime.now(UTC) - timedelta(hours=hours)).timestamp() * 1000)
+            payload = {
+                "limit": limit,
+                "query_params": {"request_ts": {"gte": since_ms}},
+                "sort_params": {"request_ts": "desc"},
+            }
+            resp = sdk.post.query_auditlog(payload)
+            if not getattr(resp, "sdk_status", False):
+                return f"Error: {_api_error('auditlog_query', resp)}"
+            entries = list((getattr(resp, "sdk_content", {}) or {}).get("items", []))
+
+            preferred = (
+                "operator_email",
+                "operator_id",
+                "request_ts",
+                "request_type",
+                "request_uri",
+                "resource_uri",
+                "request_method",
+                "response_code",
+                "source_ip",
+                "session_key_c",
+                "id",
+            )
+            trimmed = [
+                {k: e[k] for k in preferred if k in e} or e  # fall back to full record
+                for e in entries
+            ]
+            return _fmt({"window_hours": hours, "total": len(trimmed), "audit_logs": trimmed})
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Software / Upgrade Status ─────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_software_status(tenant_id: str = "", element_id: str = "") -> str:
+        """Report ION software versions, pending upgrades, and upgrade jobs.
+
+        For each element (or just `element_id`): the running software version,
+        the machine inventory record it maps to (model, serial, claim state),
+        and the element's software status — active vs staged upgrade image,
+        download progress, upgrade state, rollback version, and any scheduled
+        download/upgrade window. Also lists in-flight upgrade jobs
+        (upgrade_status query) and a version histogram across the estate,
+        so version drift is visible at a glance.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            element_id: Limit to a specific element.
+
+        Returns:
+            JSON with `version_histogram`, `elements` (per-element software
+            state), `machines_unclaimed`, and `upgrade_jobs`.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            elements = safe_items(sdk.get.elements())
+            if element_id:
+                elements = [e for e in elements if e.get("id") == element_id]
+            site_names, _ = _name_maps(sdk)
+
+            machines = safe_items(sdk.get.machines())
+            machine_by_element = {
+                m.get("em_element_id"): m for m in machines if m.get("em_element_id")
+            }
+
+            warnings: list[str] = []
+            records: list[dict[str, Any]] = []
+            histogram: dict[str, int] = {}
+            for e in elements:
+                eid = e.get("id")
+                ver = e.get("software_version") or e.get("sw_version") or "unknown"
+                histogram[ver] = histogram.get(ver, 0) + 1
+                rec: dict[str, Any] = {
+                    "element_id": eid,
+                    "element_name": e.get("name") or eid,
+                    "site_name": site_names.get(e.get("site_id"), e.get("site_id")),
+                    "model": e.get("model_name"),
+                    "serial": e.get("serial_number"),
+                    "connected": e.get("connected"),
+                    "sw_version": ver,
+                }
+                m = machine_by_element.get(eid)
+                if m:
+                    rec["machine_state"] = m.get("machine_state")
+                    rec["image_version"] = m.get("image_version")
+                try:
+                    statuses = safe_items(sdk.get.software_status(eid))
+                except Exception as exc:  # per-element degrade, keep the sweep going
+                    warnings.append(f"software_status[{eid}]: {exc}")
+                    statuses = []
+                if statuses:
+                    s = max(statuses, key=lambda x: x.get("_updated_on_utc") or 0)
+                    rec["software_status"] = {
+                        "active_version": s.get("active_version"),
+                        "upgrade_pending": bool(
+                            s.get("upgrade_image_id")
+                            and s.get("upgrade_image_id") != s.get("active_image_id")
+                        ),
+                        "upgrade_state": s.get("upgrade_state"),
+                        "download_percent": s.get("download_percent"),
+                        "rollback_version": s.get("rollback_version"),
+                        "failure_info": s.get("failure_info"),
+                        "scheduled_download": s.get("scheduled_download"),
+                        "scheduled_upgrade": s.get("scheduled_upgrade"),
+                    }
+                records.append(rec)
+
+            unclaimed = [
+                {
+                    "machine_id": m.get("id"),
+                    "serial": m.get("sl_no"),
+                    "model": m.get("model_name"),
+                    "machine_state": m.get("machine_state"),
+                    "image_version": m.get("image_version"),
+                    "connected": m.get("connected"),
+                }
+                for m in machines
+                if m.get("machine_state") != "claimed"
+            ]
+
+            jobs_resp = sdk.post.query_upgrade_status({"limit": 25})
+            if getattr(jobs_resp, "sdk_status", False):
+                jobs = list((getattr(jobs_resp, "sdk_content", {}) or {}).get("items", []))
+            else:
+                jobs = []
+                warnings.append(_api_error("upgrade_status_query", jobs_resp))
+
+            result: dict[str, Any] = {
+                "total_elements": len(records),
+                "version_histogram": histogram,
+                "elements": records,
+                "machines_unclaimed": unclaimed,
+                "upgrade_jobs": jobs,
+            }
+            if warnings:
+                result["warnings"] = warnings
+            return _fmt(result)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Policy Rules (path / QoS / NAT / security) ────────────────────────────
+
+    @mcp.tool()
+    def sdwan_policy_rules(
+        tenant_id: str = "",
+        policy_type: str = "path",
+        policy_set_id: str = "",
+    ) -> str:
+        """List Prisma SD-WAN policy sets, stacks, and the rules inside them.
+
+        Complements sdwan_list_policies (set names only) with the actual rule
+        contents — what traffic each rule matches and what it does:
+
+          - 'path'     — network policy: which WAN paths an app may use
+                         (active/backup path labels, service context)
+          - 'qos'      — priority policy: priority level and DSCP per app
+          - 'nat'      — NAT policy: source/destination NAT actions, zones,
+                         pools, ports
+          - 'security' — NGFW security policy: zone-to-zone allow/deny rules,
+                         apps, prefixes, security-profile group
+          - 'security_legacy' — original (pre-NGFW) security policy rules
+
+        Rules for every set are fetched when the tenant has ≤8 sets of that
+        type; otherwise pass `policy_set_id` to pick one (set list is always
+        returned, so the IDs are one call away).
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            policy_type: 'path', 'qos', 'nat', 'security', or 'security_legacy'.
+            policy_set_id: Fetch rules for this specific policy set only.
+
+        Returns:
+            JSON with `policy_sets`, `policy_set_stacks`, and `rules_by_set`.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            pt = policy_type.lower()
+
+            registry: dict[str, tuple[str, str, str | None]] = {
+                "path": ("networkpolicysets", "networkpolicyrules", "networkpolicysetstacks"),
+                "qos": ("prioritypolicysets", "prioritypolicyrules", "prioritypolicysetstacks"),
+                "nat": ("natpolicysets", "natpolicyrules", "natpolicysetstacks"),
+                "security": (
+                    "ngfwsecuritypolicysets",
+                    "ngfwsecuritypolicyrules",
+                    "ngfwsecuritypolicysetstacks",
+                ),
+                "security_legacy": ("securitypolicysets", "securitypolicyrules", None),
+            }
+            if pt not in registry:
+                return f"Error: unknown policy_type {policy_type!r} — use one of {sorted(registry)}"
+            sets_name, rules_name, stacks_name = registry[pt]
+            api: dict[str, Any] = {
+                "sets": getattr(sdk.get, sets_name),
+                "rules": getattr(sdk.get, rules_name),
+                "stacks": getattr(sdk.get, stacks_name) if stacks_name else None,
+            }
+
+            psets = safe_items(api["sets"]())
+            set_summaries = [
+                {
+                    "id": p.get("id"),
+                    "name": p.get("name"),
+                    "description": p.get("description"),
+                    "default": p.get("defaultrule_policyset", p.get("default_policysetstack")),
+                }
+                for p in psets
+            ]
+
+            stacks: list[dict[str, Any]] = []
+            if api["stacks"] is not None:
+                stacks = [
+                    {
+                        "id": s.get("id"),
+                        "name": s.get("name"),
+                        "policyset_ids": s.get("policyset_ids", []),
+                        "default": s.get("default_policysetstack"),
+                    }
+                    for s in safe_items(api["stacks"]())
+                ]
+
+            warnings: list[str] = []
+            rules_by_set: dict[str, list[dict[str, Any]]] = {}
+            note = ""
+            if policy_set_id:
+                targets = [p for p in psets if p.get("id") == policy_set_id]
+                if not targets:
+                    return f"Error: policy set {policy_set_id!r} not found in {pt} sets"
+            elif len(psets) <= 8:
+                targets = psets
+            else:
+                targets = []
+                note = (
+                    f"{len(psets)} {pt} policy sets — pass policy_set_id to fetch "
+                    "rules for one of them."
+                )
+
+            rule_trimmers: dict[str, Any] = {
+                "path": lambda r: {
+                    "name": r.get("name"),
+                    "order": r.get("order_number"),
+                    "enabled": r.get("enabled"),
+                    "app_def_ids": r.get("app_def_ids"),
+                    "paths_allowed": r.get("paths_allowed"),
+                    "service_context": r.get("service_context"),
+                },
+                "qos": lambda r: {
+                    "name": r.get("name"),
+                    "order": r.get("order_number"),
+                    "enabled": r.get("enabled"),
+                    "priority_number": r.get("priority_number"),
+                    "dscp": r.get("dscp"),
+                    "app_def_ids": r.get("app_def_ids"),
+                },
+                "nat": lambda r: {
+                    "name": r.get("name"),
+                    "enabled": r.get("enabled"),
+                    "protocol": r.get("protocol"),
+                    "actions": r.get("actions"),
+                    "source_zone_id": r.get("source_zone_id"),
+                    "destination_zone_id": r.get("destination_zone_id"),
+                    "source_prefixes_id": r.get("source_prefixes_id"),
+                    "destination_prefixes_id": r.get("destination_prefixes_id"),
+                    "source_ports": r.get("source_ports"),
+                    "destination_ports": r.get("destination_ports"),
+                },
+                "security": lambda r: {
+                    "name": r.get("name"),
+                    "action": r.get("action"),
+                    "enabled": r.get("enabled"),
+                    "app_def_ids": r.get("app_def_ids"),
+                    "source_zone_ids": r.get("source_zone_ids"),
+                    "destination_zone_ids": r.get("destination_zone_ids"),
+                    "source_prefix_ids": r.get("source_prefix_ids"),
+                    "destination_prefix_ids": r.get("destination_prefix_ids"),
+                    "services": r.get("services"),
+                    "security_profile_group_id": r.get("security_profile_group_id"),
+                },
+                "security_legacy": lambda r: {
+                    "name": r.get("name"),
+                    "action": r.get("action"),
+                    "enabled": r.get("enabled"),
+                    "application_ids": r.get("application_ids"),
+                    "source_filter_ids": r.get("source_filter_ids"),
+                    "destination_filter_ids": r.get("destination_filter_ids"),
+                },
+            }
+            trim = rule_trimmers[pt]
+            for p in targets:
+                sid = p.get("id")
+                if not sid:
+                    continue
+                try:
+                    rules_by_set[p.get("name") or sid] = [
+                        {"id": r.get("id"), **trim(r)} for r in safe_items(api["rules"](sid))
+                    ]
+                except Exception as exc:
+                    warnings.append(f"rules[{sid}]: {exc}")
+
+            result: dict[str, Any] = {
+                "policy_type": pt,
+                "total_sets": len(psets),
+                "policy_sets": set_summaries,
+                "policy_set_stacks": stacks,
+                "rules_by_set": rules_by_set,
+            }
+            if note:
+                result["note"] = note
+            if warnings:
+                result["warnings"] = warnings
+            return _fmt(result)
+        except Exception as exc:
+            return f"Error: {exc}"
+
+    # ── Link Health / Performance ─────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_link_health(
+        tenant_id: str = "",
+        site_id: str = "",
+        hours: int = 3,
+        interval: str = "5min",
+        include_bandwidth: bool = True,
+        max_paths: int = 6,
+    ) -> str:
+        """Report link quality (latency, jitter, MOS) and bandwidth for a site.
+
+        Lists every VPN overlay path (anynet link) touching the site with its
+        admin state and endpoints, then queries the monitor API for link
+        quality metrics per path over the last `hours` hours — LqmLatency and
+        LqmJitter in milliseconds plus LqmMos voice quality score — and, with
+        include_bandwidth, site-level ingress/egress BandwidthUsage in Mbps.
+        Datapoints are reduced to min/avg/max per series so the answer stays
+        readable; empty series mean LQM probing is disabled or the path was
+        idle in the window.
+
+        The monitor API accepts only one path per LQM request, so admin-up
+        paths are queried first, capped at `max_paths` (raise it to cover
+        more paths at the cost of extra API calls).
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode).
+            site_id: Required — site to report on (see sdwan_list_sites).
+            hours: Look-back window in hours (default 3).
+            interval: Datapoint interval: '5min', '1hour', or '1day'.
+            include_bandwidth: Also query site-level bandwidth usage.
+            max_paths: Cap on paths queried for LQM (default 6).
+
+        Returns:
+            JSON with `paths` (anynet links at the site), `link_quality`
+            (min/avg/max per metric per path), and `bandwidth` (site-level).
+        """
+        try:
+            if not site_id:
+                return "Error: site_id is required — use sdwan_list_sites to find site IDs"
+            sdk = _sdwan(tenant_id)
+            start_time, end_time = _window(hours)
+            site_names, _ = _name_maps(sdk)
+
+            links_resp = sdk.post.anynetlinks_query({"limit": 256})
+            if not getattr(links_resp, "sdk_status", False):
+                return f"Error: {_api_error('anynetlinks_query', links_resp)}"
+            links = [
+                lnk
+                for lnk in (getattr(links_resp, "sdk_content", {}) or {}).get("items", [])
+                if site_id in (lnk.get("ep1_site_id"), lnk.get("ep2_site_id"))
+            ]
+            paths: list[dict[str, Any]] = []
+            for lnk in links:
+                remote_id = (
+                    lnk.get("ep2_site_id")
+                    if lnk.get("ep1_site_id") == site_id
+                    else lnk.get("ep1_site_id")
+                )
+                paths.append(
+                    {
+                        "path_id": lnk.get("id"),
+                        "name": lnk.get("name"),
+                        "type": lnk.get("type"),
+                        "admin_up": lnk.get("admin_up"),
+                        "ep1_site": site_names.get(lnk.get("ep1_site_id"), lnk.get("ep1_site_id")),
+                        "ep2_site": site_names.get(lnk.get("ep2_site_id"), lnk.get("ep2_site_id")),
+                        "remote_site": site_names.get(remote_id, remote_id),
+                    }
+                )
+
+            def _reduce(resp: Any, extra: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+                """Collapse monitor-API series into min/avg/max summaries."""
+                out: list[dict[str, Any]] = []
+                for metric in (resp.json() or {}).get("metrics", []):
+                    for series in metric.get("series", []):
+                        for data in series.get("data", []):
+                            values = [
+                                dp.get("value")
+                                for dp in data.get("datapoints", [])
+                                if dp.get("value") is not None
+                            ]
+                            out.append(
+                                {
+                                    **(extra or {}),
+                                    "metric": series.get("name"),
+                                    "unit": series.get("unit"),
+                                    "view": series.get("view"),
+                                    "datapoints": len(data.get("datapoints", [])),
+                                    "min": min(values) if values else None,
+                                    "avg": round(sum(values) / len(values), 2) if values else None,
+                                    "max": max(values) if values else None,
+                                }
+                            )
+                return out
+
+            warnings: list[str] = []
+            link_quality: list[dict[str, Any]] = []
+            # LQM requests take exactly one path, and latency (round-trip)
+            # rejects the direction view that jitter requires — so each path
+            # needs two monitor calls. Query admin-up paths first.
+            lqm_targets = sorted(paths, key=lambda p: not p.get("admin_up"))[:max_paths]
+            base = {"start_time": start_time, "end_time": end_time, "interval": interval}
+            # LqmMos only supports unit "count"; LqmPacketLoss is rejected
+            # with METRIC_UNIT_NOT_SUPPORTED for every documented unit, so
+            # it is deliberately absent here.
+            lqm_calls = [
+                # round-trip latency rejects the direction view the
+                # directional metrics (jitter, MOS) require — two calls
+                (
+                    {},
+                    [{"name": "LqmLatency", "statistics": ["average"], "unit": "milliseconds"}],
+                ),
+                (
+                    {"individual": "direction"},
+                    [
+                        {"name": "LqmJitter", "statistics": ["average"], "unit": "milliseconds"},
+                        {"name": "LqmMos", "statistics": ["average"], "unit": "count"},
+                    ],
+                ),
+            ]
+            for p in lqm_targets:
+                pid = p["path_id"]
+                tag = {"path_id": pid, "remote_site": p["remote_site"]}
+                for view, metrics in lqm_calls:
+                    lqm_resp = sdk.post.monitor_metrics(
+                        {
+                            **base,
+                            "metrics": metrics,
+                            "view": view,
+                            "filter": {"site": [site_id], "path": [pid]},
+                        }
+                    )
+                    if getattr(lqm_resp, "sdk_status", False):
+                        link_quality.extend(_reduce(lqm_resp, extra=tag))
+                    else:
+                        warnings.append(_api_error(f"monitor_metrics[lqm {pid}]", lqm_resp))
+
+            bandwidth: list[dict[str, Any]] = []
+            if include_bandwidth:
+                bw_payload = {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "interval": interval,
+                    "metrics": [
+                        {"name": "BandwidthUsage", "statistics": ["average"], "unit": "Mbps"}
+                    ],
+                    "view": {"individual": "direction"},
+                    "filter": {"site": [site_id]},
+                }
+                bw_resp = sdk.post.monitor_metrics(bw_payload)
+                if getattr(bw_resp, "sdk_status", False):
+                    bandwidth = _reduce(bw_resp)
+                else:
+                    warnings.append(_api_error("monitor_metrics[bandwidth]", bw_resp))
+
+            result: dict[str, Any] = {
+                "site_id": site_id,
+                "site_name": site_names.get(site_id, site_id),
+                "window_hours": hours,
+                "total_paths": len(paths),
+                "paths": paths,
+                "link_quality": link_quality,
+                "bandwidth": bandwidth,
+            }
+            if warnings:
+                result["warnings"] = warnings
+            return _fmt(result)
         except Exception as exc:
             return f"Error: {exc}"

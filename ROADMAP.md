@@ -9,6 +9,19 @@ do about it.
 
 ## Recently shipped
 
+- **Classic Prisma SD-WAN depth (round 1)** — 5 new read-only tools on the
+  existing `prisma-sase` session, live-validated against a 16-site lab
+  tenant (2026-07-12): `sdwan_events` (alarm/alert feed with event-code
+  resolution and severity summary), `sdwan_audit_logs` (403s gracefully on
+  view-only roles), `sdwan_software_status` (per-ION version + staged
+  upgrade state; found two stuck `download_cancelled` upgrades in the lab on
+  first run), `sdwan_policy_rules` (path/QoS/NAT/NGFW-security rule
+  contents + stacks), `sdwan_link_health` (per-path LQM latency/jitter/MOS
+  + site bandwidth; the monitor API takes one path per LQM request, and
+  `LqmPacketLoss` rejects every unit — omitted). Also fixed a latent bug:
+  element software version is `software_version` not `sw_version`, so
+  `sdwan_list_elements`, `sdwan_topology`, and the AS-BUILT §4.1 device
+  table always showed it empty.
 - **pan.dev endpoint catalog** — 1,593 endpoints / 23 families indexed with
   per-file blob SHAs; REST fallbacks resolve to exact documented URLs; spec
   drift surfaces in `scm_check_updates`.
@@ -99,15 +112,17 @@ built tools against yet, not in upstream drift._
   *how the path actually performs* (hop count, per-hop latency
   branch → DC/app). Requires an ADEM-licensed tenant with agents/tests
   enabled for live validation — same rule as SPI/5G: don't scaffold blind.
-- **Classic Prisma SD-WAN depth** — `sdwan/legacy` + `sdwan/unified`, 2,162
-  paths combined (45/44 files), newly catalogued. `sdwan.py` already has an
-  authenticated `prisma-sase` client wired up but only covers ~12 read-only
-  tools (sites, elements, WAN interfaces/networks, path groups, generic
-  policies, clusters, BGP, topology) — events/alerting, performance
-  monitoring, NAT/QoS/security-policy config, audit logs, and software
-  management are all untouched despite the client already sitting there.
-  Highest-leverage gap of anything on this list: no new auth/family to wire
-  up, just unbuilt tools against an existing session.
+- **Classic Prisma SD-WAN depth (round 2)** — round 1 (2026-07-12, see
+  Recently shipped) covered events/alerting, audit logs, software
+  management, policy rules, and per-path link quality. Still unbuilt from
+  the 2,162-path `sdwan/legacy`+`sdwan/unified` families: flows
+  (`monitor/flows` — top talkers per site), app-level performance
+  (`monitor/aggregates` app QoS / healthscore — needs its own payload
+  schema: healthscore type + aggregate operator), cellular/5G module
+  status, IPFIX/SNMP config, event-correlation policy config, and
+  interface-level status sweeps. Audit log + software history remain 403
+  for current view-only service accounts — same blocker as Insights
+  `tunnel_list`; revisit when a broader read role lands.
 - **Configuration Orchestration (site-based Remote Networks)** — `sase/config-orch`,
   11 paths, **zero tooling**. Site + license workflow onboarding (the
   partner-facing RNHP site model) complementing the existing per-RN tooling.

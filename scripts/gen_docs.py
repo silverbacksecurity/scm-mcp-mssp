@@ -53,7 +53,8 @@ SECTION_MAP: dict[str, tuple[str, str]] = {
     ),
     "sdwan.py": (
         "Prisma SD-WAN",
-        "Sites, elements, WAN interfaces/networks, path groups, policies, topology.",
+        "Sites, elements, WAN interfaces/networks, path groups, policies and rules, "
+        "topology, events/alarms, audit log, software status, link health.",
     ),
     "ops.py": (
         "Operational Visibility",

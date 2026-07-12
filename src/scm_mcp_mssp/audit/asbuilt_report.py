@@ -2710,7 +2710,7 @@ class AsBuiltReportBuilder:
                     e.get("name") or _NA,
                     e.get("model_name") or _NA,
                     e.get("serial_number") or _NA,
-                    e.get("sw_version") or _NA,
+                    e.get("software_version") or e.get("sw_version") or _NA,
                     str(e.get("connected", _NA)),
                     e.get("role") or _NA,
                 ]

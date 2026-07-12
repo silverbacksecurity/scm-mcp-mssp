@@ -8,10 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Classic Prisma SD-WAN depth — 5 new tools** against the already-wired `prisma-sase` client, all live-validated on a 16-site lab tenant (`tools/sdwan.py`):
+  - **`sdwan_events`** — alarm/alert feed (POST `events/query` v3.7) with severity/code/site filters, active-only mode, event codes resolved to display names via the tenant's event-code catalog, and a by-severity/by-code summary
+  - **`sdwan_audit_logs`** — controller audit trail (who changed what); renders a clear RBAC hint on the HTTP 403 that view-only service accounts get
+  - **`sdwan_software_status`** — per-ION running version, staged-upgrade state (surfaced two stuck `download_cancelled` upgrades in the lab on first run), machine claim state, unclaimed inventory, upgrade jobs, and an estate-wide version histogram
+  - **`sdwan_policy_rules`** — rule contents for path/QoS/NAT/NGFW-security/legacy-security policy sets plus set stacks (complements `sdwan_list_policies`, which only names the sets)
+  - **`sdwan_link_health`** — per-path LQM latency/jitter/MOS (min/avg/max) plus site-level ingress/egress bandwidth from the monitor API; the API takes one path per LQM request and latency rejects the direction view jitter/MOS require, so paths are queried admin-up-first two calls each, capped by `max_paths`. `LqmPacketLoss` omitted — the API rejects every unit for it
+
 - **SD-WAN site geo locations** — `sdwan_list_sites` returns each site's `location` (latitude/longitude); `sdwan_wan_ip_summary` attaches `site_address` + `site_location` to every WAN IP record (`tools/sdwan.py`)
 - **WAN IP enrichment (opt-in `enrich=true`)** on `sdwan_wan_ip_summary` and `scm_ngfw_wan_ip_summary` — whatsmyip-style reverse lookup of each public WAN IP (ISP, organisation, ASN, reverse DNS, IP geolocation) via the new `utils/ipenrich.py`. Provider-pluggable (`ip_enrichment_provider` setting: ip-api.com batch by default, ipinfo.io + `ipinfo_token` optional), 6 h in-process cache, additive-only (lookup failures degrade to warnings). Opt-in because it sends tenant public IPs to a third-party service
 - **Detected post-NAT public IP per ION element** — `sdwan_wan_ip_summary` now also returns `detected_public_ips`: the source address the cloud controller sees each element's config/events connection arriving from (element status `config_and_events_from`), i.e. the branch's real public egress even when the WAN interface holds an RFC1918 address behind upstream NAT
 - **Widened endpoint catalog** — `gen_endpoint_catalog.py` now walks `sdwan`, `dlp`, `dns-security`, `cloudngfw`, `cdl`, `email-dlp` pan.dev spec trees in addition to `sase`/`scm`/`access`; catalog grew from 1,593 endpoints / 23 families to 3,871 endpoints / 30 families
+
+### Fixed
+- **SD-WAN element software version was always null** — elements carry `software_version`, not `sw_version`; fixed in `sdwan_list_elements`, `sdwan_topology`, and the AS-BUILT §4.1 edge-device inventory table, which all silently showed empty/Unknown versions
 
 ## [0.9.0] - 2026-07-09
 

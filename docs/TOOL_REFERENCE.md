@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**110 tools** across 18 modules.
+**115 tools** across 18 modules.
 
 ## Table of Contents
 
@@ -1827,15 +1827,16 @@ Ref: https://pan.dev/prisma-airs/api/airuntimesecurity/prismaairsmanagementapi/
 
 ## Prisma SD-WAN
 
-_Sites, elements, WAN interfaces/networks, path groups, policies, topology._
+_Sites, elements, WAN interfaces/networks, path groups, policies and rules, topology, events/alarms, audit log, software status, link health._
 
 ### `sdwan_list_sites`
 
 List Prisma SD-WAN sites (branches, data centres, hub sites).
 
 ```
-Returns name, address, site type (branch/dc/hub), element count,
-admin state, and WAN interface count for each site.
+Returns name, address, geo location (latitude/longitude), site type
+(branch/dc/hub), element count, admin state, and WAN interface count
+for each site.
 
 Args:
     tenant_id: SCM tenant ID (MSSP mode).
@@ -1905,7 +1906,25 @@ For every element (or just those at `site_id` if given), inspects each
 interface marked used_for="public" or "private" in its config and reads
 the live-bound IP from the interface's operational status — this covers
 both static and DHCP-assigned WAN circuits, which the config object
-alone cannot show for DHCP.
+alone cannot show for DHCP. Each record carries the site's configured
+street address and geo location (latitude/longitude).
+
+Also reports each element's **detected public IP** (`detected_public_ips`
+section): the post-NAT source address the cloud controller sees the
+ION's config/events connection arriving from (element status
+`config_and_events_from`). For branches whose WAN interface holds an
+RFC1918 address behind an upstream NAT, this is the real public egress
+IP — no on-device lookup needed. Caveat: it reflects the circuit the
+controller connection rides (normally the primary internet circuit),
+so a multi-WAN branch shows one NAT IP, not one per circuit.
+
+With enrich=true, each public WAN IP and detected public IP is
+additionally looked up against an external IP-intelligence provider
+(whatsmyip-style reverse lookup: ISP, organisation, ASN, reverse DNS,
+and IP geolocation) so circuit provider and location can be verified
+against what is configured. Note this sends the tenant's public IPs
+to a third-party service (`ip_enrichment_provider` in settings,
+default ip-api.com) — hence opt-in, never on by default.
 
 Use this to populate a WAN IP inventory table/diagram for AS-BUILT
 documentation, or to spot circuits that are down or missing an address.
@@ -1913,16 +1932,21 @@ documentation, or to spot circuits that are down or missing an address.
 Args:
     tenant_id: SCM tenant ID (MSSP mode).
     site_id: Optional — limit to elements at this site.
+    enrich: Look up ISP/ASN/rDNS/geo for each public WAN IP.
 
 Returns:
-    JSON array of {site_name, element_name, interface_name, used_for,
-    operational_state, ipv4_addresses, ipv6_addresses} records.
+    JSON with `wan_ips` records ({site_name, site_address, site_location,
+    element_name, interface_name, used_for, operational_state,
+    ipv4_addresses, ipv6_addresses[, enrichment]}) and
+    `detected_public_ips` ({site_name, element_name, detected_public_ip,
+    connected[, enrichment]}).
 ```
 
 | Parameter | Type | Default |
 |-----------|------|---------|
 | `tenant_id` | `str` | `''` |
 | `site_id` | `str` | `''` |
+| `enrich` | `bool` | `False` |
 
 ### `sdwan_list_wan_networks`
 
@@ -2082,6 +2106,180 @@ Returns:
 | Parameter | Type | Default |
 |-----------|------|---------|
 | `tenant_id` | `str` | `''` |
+
+### `sdwan_events`
+
+List Prisma SD-WAN events (alarms and alerts) with a severity summary.
+
+```
+Queries the controller event feed (POST events/query) for the last
+`hours` hours, newest first. Each event carries its event code,
+human-readable display name and category (resolved from the tenant's
+event-code catalog), severity, priority, cleared/acknowledged/standing
+state, and the site and element it fired on.
+
+The `summary` section counts events by severity and by code, and
+highlights how many are still active (not cleared) — a quick NOC
+health read without paging through the raw feed.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    hours: Look-back window in hours (default 24).
+    category: 'alarm', 'alert', or 'all'.
+    severity: Comma-separated filter, e.g. 'critical,major'.
+    site_id: Limit to events at this site.
+    code: Comma-separated event-code filter,
+          e.g. 'DEVICEHW_INTERFACE_DOWN'.
+    include_cleared: Include events that have already cleared
+                     (set False for active-issues-only).
+    max_events: Maximum events to return (default 50).
+
+Returns:
+    JSON with `summary` (counts by severity/code, active count) and
+    `events` (trimmed records, newest first).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `hours` | `int` | `24` |
+| `category` | `str` | `'all'` |
+| `severity` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `code` | `str` | `''` |
+| `include_cleared` | `bool` | `True` |
+| `max_events` | `int` | `50` |
+
+### `sdwan_audit_logs`
+
+List Prisma SD-WAN audit-log entries (who changed what, and when).
+
+```
+Queries the controller audit log (POST auditlog/query) for the last
+`hours` hours, newest first. Each entry records the operator, the
+request (method + resource URI), and the response code — the trail
+for config-change forensics and compliance evidence.
+
+Note: requires an audit-log read permission on the service account;
+view-only roles typically get HTTP 403 (reported gracefully).
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    hours: Look-back window in hours (default 24).
+    limit: Maximum entries to return (default 50).
+
+Returns:
+    JSON array of audit entries, or a clear RBAC message on 403.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `hours` | `int` | `24` |
+| `limit` | `int` | `50` |
+
+### `sdwan_software_status`
+
+Report ION software versions, pending upgrades, and upgrade jobs.
+
+```
+For each element (or just `element_id`): the running software version,
+the machine inventory record it maps to (model, serial, claim state),
+and the element's software status — active vs staged upgrade image,
+download progress, upgrade state, rollback version, and any scheduled
+download/upgrade window. Also lists in-flight upgrade jobs
+(upgrade_status query) and a version histogram across the estate,
+so version drift is visible at a glance.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    element_id: Limit to a specific element.
+
+Returns:
+    JSON with `version_histogram`, `elements` (per-element software
+    state), `machines_unclaimed`, and `upgrade_jobs`.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+
+### `sdwan_policy_rules`
+
+List Prisma SD-WAN policy sets, stacks, and the rules inside them.
+
+```
+Complements sdwan_list_policies (set names only) with the actual rule
+contents — what traffic each rule matches and what it does:
+
+  - 'path'     — network policy: which WAN paths an app may use
+                 (active/backup path labels, service context)
+  - 'qos'      — priority policy: priority level and DSCP per app
+  - 'nat'      — NAT policy: source/destination NAT actions, zones,
+                 pools, ports
+  - 'security' — NGFW security policy: zone-to-zone allow/deny rules,
+                 apps, prefixes, security-profile group
+  - 'security_legacy' — original (pre-NGFW) security policy rules
+
+Rules for every set are fetched when the tenant has ≤8 sets of that
+type; otherwise pass `policy_set_id` to pick one (set list is always
+returned, so the IDs are one call away).
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    policy_type: 'path', 'qos', 'nat', 'security', or 'security_legacy'.
+    policy_set_id: Fetch rules for this specific policy set only.
+
+Returns:
+    JSON with `policy_sets`, `policy_set_stacks`, and `rules_by_set`.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `policy_type` | `str` | `'path'` |
+| `policy_set_id` | `str` | `''` |
+
+### `sdwan_link_health`
+
+Report link quality (latency, jitter, MOS) and bandwidth for a site.
+
+```
+Lists every VPN overlay path (anynet link) touching the site with its
+admin state and endpoints, then queries the monitor API for link
+quality metrics per path over the last `hours` hours — LqmLatency and
+LqmJitter in milliseconds plus LqmMos voice quality score — and, with
+include_bandwidth, site-level ingress/egress BandwidthUsage in Mbps.
+Datapoints are reduced to min/avg/max per series so the answer stays
+readable; empty series mean LQM probing is disabled or the path was
+idle in the window.
+
+The monitor API accepts only one path per LQM request, so admin-up
+paths are queried first, capped at `max_paths` (raise it to cover
+more paths at the cost of extra API calls).
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    site_id: Required — site to report on (see sdwan_list_sites).
+    hours: Look-back window in hours (default 3).
+    interval: Datapoint interval: '5min', '1hour', or '1day'.
+    include_bandwidth: Also query site-level bandwidth usage.
+    max_paths: Cap on paths queried for LQM (default 6).
+
+Returns:
+    JSON with `paths` (anynet links at the site), `link_quality`
+    (min/avg/max per metric per path), and `bandwidth` (site-level).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `hours` | `int` | `3` |
+| `interval` | `str` | `'5min'` |
+| `include_bandwidth` | `bool` | `True` |
+| `max_paths` | `int` | `6` |
 
 ---
 
@@ -2645,6 +2843,12 @@ running-config via the NGFW Operations API and parses physical/aggregate
 interfaces (ethernetX/Y, aeN) that have Layer 3 addressing, along with
 their assigned security zone.
 
+With enrich=true, each public interface IP is additionally looked up
+against an external IP-intelligence provider (ISP, organisation, ASN,
+reverse DNS, IP geolocation). Note this sends the tenant's public IPs
+to a third-party service (`ip_enrichment_provider` in settings, default
+ip-api.com) — hence opt-in, never on by default.
+
 Use this to populate a WAN IP inventory table for AS-BUILT documentation.
 Note: this reflects **configuration**, not live operational state — a
 DHCP-configured interface is reported with addressing="dhcp" but no IP,
@@ -2656,12 +2860,14 @@ NGFW interfaces.
 Args:
     tenant_id: SCM tenant ID. Defaults to active tenant.
     serial: Optional — limit to a single device serial number.
+    enrich: Look up ISP/ASN/rDNS/geo for each public interface IP.
 ```
 
 | Parameter | Type | Default |
 |-----------|------|---------|
 | `tenant_id` | `str` | `''` |
 | `serial` | `str` | `''` |
+| `enrich` | `bool` | `False` |
 
 ---
 
