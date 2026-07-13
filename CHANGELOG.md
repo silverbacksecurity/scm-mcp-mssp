@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **PAB tenant depth** (`tools/pab.py`) — three read-only tools over the previously untooled `access/browser-mgmt` family (`/seb-api/v1/*`, 33 paths):
+  - **`scm_pab_inventory`** — enrolled browser users, device inventory with endpoint posture (screen lock / disk encryption / firewall, mapped to booleans), user/device groups, and a summary view with posture-compliance roll-up; cursor pagination followed automatically
+  - **`scm_pab_apps`** — configured application catalog (type/name filters), application categories, and app groups
+  - **`scm_pab_user_requests`** — pending end-user browser access requests (the admin approve/deny queue)
+  - Live-validated: base URL is `api.sase.paloaltonetworks.com/seb-api/v1` with common SASE bearer auth; note the subscription licenses API shows no `seb` entry even on tenants where the API serves data — provisioning is detected from the API itself (unprovisioned tenants return empty `/users` but 404/500 "tenant not found" on `/applications`), and the tools surface that distinctly
+  - CLI: "PAB Inventory" and "PAB User Requests" entries in the SSE, DLP & CASB menu
 - **`scm_saas_posture`** (`tools/posture.py`) — standalone SaaS Security Posture tool: onboarded SSPM apps with severity-ranked misconfiguration findings, Identity-SSPM IdP/NHI posture, and supported-app catalog capability counts (previously this data was only extracted inside compliance snapshots). Supports **manual export/import**: `save_to` writes the raw posture snapshot to JSON (format-tagged `scm-mcp-mssp/saas-posture@1`) for archiving/diffing, `load_from` renders a previous export offline without touching the API. Unlicensed (HTTP 500) and unprovisioned (404) tenants report clearly instead of erroring. CLI: new "SaaS Posture (SSPM)" entry in the Posture, Incidents & NOC menu with import/export prompts
 - **Classic SD-WAN depth (round 2)** (`tools/sdwan.py`):
   - **`sdwan_flows`** — top talkers per site from the flow log: top sources / destinations / applications by bytes (app IDs resolved via appdefs), per-path-type breakdown, and dropped-flow count. The flow monitor takes one site per request

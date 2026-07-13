@@ -448,6 +448,8 @@ def _menu_sse_dlp(
                     ("6", "ZTNA Connectors", "List ZTNA connector infrastructure"),
                     ("7", "Prisma Browser", "List RBI / Prisma Browser config"),
                     ("8", "AIRS", "List AI Runtime Security configuration"),
+                    ("9", "PAB Inventory", "Browser users, devices & endpoint posture"),
+                    ("10", "PAB User Requests", "Pending browser access requests"),
                 ]
             )
         )
@@ -476,6 +478,10 @@ def _menu_sse_dlp(
             _op_browser_list(tenant, console, _pause)
         elif choice == "8":
             _op_airs_list(tenant, console, _pause)
+        elif choice == "9":
+            _op_pab_inventory(tenant, console, _pause)
+        elif choice == "10":
+            _op_pab_user_requests(tenant, console, _pause)
 
 
 # ── sub-menu: MSSP Operations ─────────────────────────────────────────────
@@ -1780,6 +1786,52 @@ def _op_ztna_list(tenant, console, _pause) -> None:
                 console.print("[yellow]ZTNA Connector not enabled for this tenant.[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]ZTNA connectors not available: {exc}[/yellow]")
+    _pause()
+
+
+def _op_pab_inventory(tenant, console, _pause) -> None:
+    from .tools.pab import register_pab_tools
+
+    view = Prompt.ask(
+        "View",
+        choices=["summary", "users", "devices", "user_groups", "device_groups"],
+        default="summary",
+    )
+    with console.status("[cyan]Fetching PAB inventory...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_pab_tools,
+                "scm_pab_inventory",
+                tenant_id=tenant.tenant_id,
+                view=view,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.lstrip().startswith(("{", "[")):
+        console.print_json(result)
+    else:
+        console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
+    _pause()
+
+
+def _op_pab_user_requests(tenant, console, _pause) -> None:
+    from .tools.pab import register_pab_tools
+
+    with console.status("[cyan]Fetching PAB user requests...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_pab_tools,
+                "scm_pab_user_requests",
+                tenant_id=tenant.tenant_id,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.lstrip().startswith(("{", "[")):
+        console.print_json(result)
+    else:
+        console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
     _pause()
 
 

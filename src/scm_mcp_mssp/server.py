@@ -33,6 +33,7 @@ from .tools.ncsc_baseline import register_ncsc_tools
 from .tools.network import register_network_tools
 from .tools.objects import register_object_tools
 from .tools.ops import register_ops_tools
+from .tools.pab import register_pab_tools
 from .tools.pab_msp import register_pab_msp_tools
 from .tools.posture import register_posture_tools
 from .tools.reload import register_reload_tool
@@ -159,6 +160,7 @@ def register_all_tools(
     register_ops_tools(mcp, get_client)
     register_spi_tools(mcp, get_client)
     register_pab_msp_tools(mcp, get_client)
+    register_pab_tools(mcp, get_client)
 
 
 def create_server() -> FastMCP:

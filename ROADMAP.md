@@ -9,6 +9,18 @@ do about it.
 
 ## Recently shipped
 
+- **PAB tenant depth** (2026-07-13) — `scm_pab_inventory` /
+  `scm_pab_apps` / `scm_pab_user_requests` over the previously untooled
+  `access/browser-mgmt` family (33 paths, `/seb-api/v1/*`). Users,
+  device inventory with endpoint posture (screen lock / disk encryption /
+  firewall), groups, app catalog, and the user-request queue.
+  Live-validated on a lab tenant (14 users, 8 devices across 4
+  OSes — posture roll-up shows real gaps: 5/8 disk encryption). Base URL
+  `api.sase.paloaltonetworks.com/seb-api/v1`, common SASE bearer;
+  provisioning detected from the API (no `seb` license entry exists even
+  on serving tenants — empty `/users` + "tenant not found" on
+  `/applications` = unprovisioned). Feeds the remaining "PAB posture in
+  tenant reporting" item (dashboard columns + CE/CAF evidence).
 - **Standalone SaaS posture tool** (2026-07-13) — `scm_saas_posture`
   surfaces the SSPM data that was previously buried in compliance
   snapshots: onboarded apps with severity-ranked misconfig findings,

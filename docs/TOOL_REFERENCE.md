@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**120 tools** across 18 modules.
+**123 tools** across 19 modules.
 
 ## Table of Contents
 
@@ -26,6 +26,7 @@ All tools authenticate via Bearer-token OAuth (SASE client credentials) configur
 - [Service Provider Interconnect](#service-provider-interconnect)
 - [Prisma Access Browser for MSP](#prisma-access-browser-for-msp)
 - [Utility](#utility)
+- [Pab](#pab)
 
 ---
 
@@ -3298,3 +3299,103 @@ Returns:
 | Parameter | Type | Default |
 |-----------|------|---------|
 | `delay_seconds` | `int` | `3` |
+
+---
+
+## Pab
+
+_Prisma Access Browser — tenant-level management/inventory tools._
+
+### `scm_pab_inventory`
+
+Prisma Access Browser enrolled users, devices, and posture.
+
+```
+Views:
+- summary: counts — users by status, devices by OS, and endpoint
+  posture compliance (screen lock / disk encryption / firewall
+  enabled) across the device fleet.
+- users: enrolled browser users (email, status, provider,
+  first/last seen, groups).
+- devices: device inventory with per-device posture status,
+  OS/model/serial, and last seen.
+- user_groups / device_groups: group definitions (device groups
+  carry the posture-policy platform).
+
+Unprovisioned tenants report clearly (users/devices come back
+empty while config endpoints return "tenant not found").
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    view: summary | users | devices | user_groups | device_groups.
+    limit: Max records per list view (default 50, cursor-paginated).
+    os_type: devices view — filter by OS type (e.g. macOS, Windows).
+    user_status: users view — filter by status (e.g. active).
+
+Returns:
+    JSON with the requested view plus any endpoint warnings.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `view` | `str` | `'summary'` |
+| `limit` | `int` | `50` |
+| `os_type` | `str` | `''` |
+| `user_status` | `str` | `''` |
+
+### `scm_pab_apps`
+
+Prisma Access Browser application catalog and app groups.
+
+```
+Views:
+- apps: configured applications (name, type, category, URLs) with
+  optional type/name filters.
+- categories: the list of application categories.
+- app_groups: application group definitions.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    view: apps | categories | app_groups.
+    app_type: apps view — filter by application type.
+    name: apps view — search by name.
+    limit: Max records (default 50).
+
+Returns:
+    JSON with the requested view.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `view` | `str` | `'apps'` |
+| `app_type` | `str` | `''` |
+| `name` | `str` | `''` |
+| `limit` | `int` | `50` |
+
+### `scm_pab_user_requests`
+
+Prisma Access Browser user access requests (helpdesk queue).
+
+```
+Lists end-user requests raised from the browser (e.g. access to a
+blocked site or app) with their status — the queue an admin
+approves or denies in the PAB console.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode).
+    status: Filter by request status.
+    request_type: Filter by request type.
+    limit: Max records (default 50).
+
+Returns:
+    JSON array of user requests.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `status` | `str` | `''` |
+| `request_type` | `str` | `''` |
+| `limit` | `int` | `50` |
