@@ -183,10 +183,17 @@ def test_apps_filters_and_categories(tools: Any) -> None:
     assert cats["categories"] == ["Analytics", "Management"]
 
 
-def test_apps_unprovisioned_error(tools: Any) -> None:
+def test_apps_unprovisioned_graceful_note(tools: Any) -> None:
     t = tools({"applications": (404, "")})
+    data = json.loads(t["scm_pab_apps"](view="apps"))
+    assert data["total"] == 0 and data["applications"] == []
+    assert "not provisioned" in data["note"]
+
+
+def test_apps_403_still_errors(tools: Any) -> None:
+    t = tools({"applications": (403, "")})
     out = t["scm_pab_apps"](view="apps")
-    assert out.startswith("Error:") and "not provisioned" in out
+    assert out.startswith("Error:") and "Super User" in out
 
 
 def test_user_requests_filters(tools: Any) -> None:

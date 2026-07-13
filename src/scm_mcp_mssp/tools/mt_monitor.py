@@ -195,8 +195,11 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
                     from ..config.settings import load_all_tenant_configs
 
                     cfgs = load_all_tenant_configs()
-                    if tenant_id in cfgs:
-                        mapped = _REGION_MAP.get(cfgs[tenant_id].insights_region, "europe")
+                    tc = cfgs.get(tenant_id) or next(
+                        (c for c in cfgs.values() if c.tenant_id == tenant_id), None
+                    )
+                    if tc is not None:
+                        mapped = _REGION_MAP.get(tc.insights_region, "europe")
                 except Exception:
                     pass
                 sibling = {"europe": ["uk"], "uk": ["europe"]}.get(mapped, [])

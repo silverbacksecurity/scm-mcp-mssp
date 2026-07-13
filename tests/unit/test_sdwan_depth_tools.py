@@ -357,6 +357,19 @@ def tools(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return {name: tool.fn for name, tool in mcp._tool_manager._tools.items()}
 
 
+def test_sdwan_resolves_settings_key(
+    tools: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # get_tenant_meta misses, but the settings key resolves via configs
+    monkeypatch.setattr(sdwan_tools, "get_tenant_meta", lambda tid: None)
+    monkeypatch.setattr(
+        "scm_mcp_mssp.config.settings.load_all_tenant_configs",
+        lambda: {"lab-key": SimpleNamespace(tenant_id="999")},
+    )
+    data = json.loads(tools["sdwan_list_sites"](tenant_id="lab-key"))
+    assert data["total"] == 2
+
+
 def test_new_tools_register(tools: dict[str, Any]) -> None:
     assert {
         "sdwan_events",

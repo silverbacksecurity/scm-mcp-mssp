@@ -86,10 +86,22 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
     """Register Prisma SD-WAN MCP tools."""
 
     def _sdwan(tenant_id: str = "") -> Any:
-        """Resolve SD-WAN client using the cached TenantConfig for this tenant."""
-        # Resolve tenant_id: use supplied value or fall back to first loaded tenant
+        """Resolve SD-WAN client for a tenant.
+
+        Accepts either the numeric TSG id (looked up in the auth cache) or a
+        settings.toml tenant key ("bt-sase-test-lab"), so callers don't need
+        to know which form the other tools use.
+        """
         tid = tenant_id or (list_loaded_tenants() or [""])[0]
         tc = get_tenant_meta(tid)
+        if tc is None:
+            try:
+                from ..config.settings import load_all_tenant_configs
+
+                cfgs = load_all_tenant_configs()
+                tc = cfgs.get(tid) or next((c for c in cfgs.values() if c.tenant_id == tid), None)
+            except Exception:
+                tc = None
         if tc is None:
             raise ValueError(
                 f"Tenant {tid!r} is not loaded. Check settings.toml and restart the server."

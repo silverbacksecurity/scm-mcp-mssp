@@ -244,7 +244,10 @@ def register_pab_tools(mcp: FastMCP, get_client: Any) -> None:
                     params["name"] = name
                 status, body = _get_json(client, "applications", params)
                 if status != 200:
-                    return f"Error: {_status_hint('applications', status, body)}"
+                    hint = _status_hint("applications", status, body)
+                    if "not provisioned" in hint:
+                        return _fmt({"view": view, "total": 0, "applications": [], "note": hint})
+                    return f"Error: {hint}"
                 apps = (body.get("data") or []) if isinstance(body, dict) else []
                 items = [
                     {
@@ -260,13 +263,21 @@ def register_pab_tools(mcp: FastMCP, get_client: Any) -> None:
             if view == "categories":
                 status, body = _get_json(client, "applications/categories", {})
                 if status != 200:
-                    return f"Error: {_status_hint('applications/categories', status, body)}"
+                    hint = _status_hint("applications/categories", status, body)
+                    if "not provisioned" in hint:
+                        return _fmt({"view": view, "total": 0, "categories": [], "note": hint})
+                    return f"Error: {hint}"
                 cats = (body.get("data") or []) if isinstance(body, dict) else []
                 return _fmt({"view": view, "total": len(cats), "categories": cats})
             if view == "app_groups":
                 status, body = _get_json(client, "application-groups", {"limit": limit})
                 if status != 200:
-                    return f"Error: {_status_hint('application-groups', status, body)}"
+                    hint = _status_hint("application-groups", status, body)
+                    if "not provisioned" in hint:
+                        return _fmt(
+                            {"view": view, "total": 0, "application_groups": [], "note": hint}
+                        )
+                    return f"Error: {hint}"
                 groups = (body.get("data") or []) if isinstance(body, dict) else []
                 return _fmt({"view": view, "total": len(groups), "application_groups": groups})
             return "Error: view must be one of apps, categories, app_groups"
