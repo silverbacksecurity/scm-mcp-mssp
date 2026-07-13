@@ -5,12 +5,15 @@ Tools:
     scm_incident_search   — search/filter SCM security incidents (single or all tenants)
     scm_incident_summary  — cross-tenant NOC incident dashboard (counts by severity/status)
     scm_posture_report    — retrieve Posture Management best-practice report findings
+    scm_saas_posture      — SSPM SaaS app posture + Identity-SSPM IdPs, with manual
+                            JSON export (save_to) / import (load_from)
 """
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -92,6 +95,136 @@ def _fmt_ts(ts: str | None) -> str:
         return dt.strftime("%Y-%m-%d %H:%M")
     except Exception:
         return ts[:16] if ts else "—"
+
+
+_SAAS_POSTURE_FORMAT = "scm-mcp-mssp/saas-posture@1"
+
+
+def _render_saas_posture(data: dict[str, Any], source: str, include_catalog: bool) -> str:
+    """Render a saas-posture snapshot dict (live or imported) as markdown."""
+    from collections import Counter
+
+    apps = data.get("apps") or []
+    catalog = data.get("catalog") or []
+    idps = data.get("idps") or []
+    lines = ["# SaaS Security Posture (SSPM)", "", f"_Source: {source}_", ""]
+
+    if not data.get("sspm_licensed"):
+        lines += [
+            "**SSPM is not licensed or not reachable on this tenant** — the SSPM API "
+            "returned HTTP 500 (the service's unlicensed response) or was unavailable.",
+            "",
+        ]
+    else:
+        all_configs = [(a, c) for a in apps for c in (a.get("_configs") or [])]
+        high_crit = sum(
+            1 for _, c in all_configs if (c.get("severity") or "").lower() in ("critical", "high")
+        )
+        lines += [
+            "| Metric | Value |",
+            "|---|---|",
+            f"| Onboarded SaaS applications | {len(apps)} |",
+            f"| Misconfiguration findings | {len(all_configs)} |",
+            f"| High/Critical findings | {high_crit} |",
+            f"| Supported apps in catalog | {len(catalog)} |",
+            "",
+        ]
+        if apps:
+            lines += [
+                "## Onboarded Applications",
+                "",
+                "| Application | Status | Verticals | Findings | High/Crit |",
+                "|---|---|---|---|---|",
+            ]
+            for a in apps:
+                name = a.get("display_name") or a.get("app_name") or a.get("name") or "—"
+                status = a.get("status") or a.get("connection_status") or "—"
+                verticals = ", ".join(a.get("verticals") or []) or "—"
+                cfgs = a.get("_configs") or []
+                hc = sum(
+                    1 for c in cfgs if (c.get("severity") or "").lower() in ("critical", "high")
+                )
+                lines.append(f"| {name} | {status} | {verticals} | {len(cfgs)} | {hc} |")
+            lines.append("")
+            if all_configs:
+                ranked = sorted(
+                    all_configs,
+                    key=lambda ac: _SEV_ORDER.get((ac[1].get("severity") or "").title(), 9),
+                )
+                lines += [
+                    "## Top Findings",
+                    "",
+                    "| App | Finding | Severity | Status |",
+                    "|---|---|---|---|",
+                ]
+                for a, c in ranked[:15]:
+                    app_name = a.get("display_name") or a.get("app_name") or a.get("name") or "—"
+                    title = (
+                        c.get("title")
+                        or c.get("name")
+                        or c.get("config_name")
+                        or c.get("id")
+                        or "—"
+                    )
+                    lines.append(
+                        f"| {app_name} | {title} | {c.get('severity', '—')} | {c.get('status', '—')} |"
+                    )
+                lines.append("")
+        elif catalog:
+            features: Counter[str] = Counter()
+            for capp in catalog:
+                for f in capp.get("features") or []:
+                    features[f] += 1
+            lines += [
+                "_SSPM is licensed but **no SaaS applications are onboarded** for posture "
+                "scanning yet (SaaS Security → Posture Management → Applications)._",
+                "",
+                "| Catalog capability | Supported apps |",
+                "|---|---|",
+                f"| Posture/misconfiguration scanning (SCAN) | {features.get('SCAN', 0)} |",
+                f"| Non-Human Identity tracking (NHI) | {features.get('IDENTITY_NHI', 0)} |",
+                f"| Third-party app discovery | {features.get('THIRD_PARTY_APPS', 0)} |",
+                f"| AI agent scanning (AGENT_SCAN) | {features.get('AGENT_SCAN', 0)} |",
+                f"| Automated remediation | {features.get('REMEDIATE', 0)} |",
+                "",
+            ]
+
+    lines += ["## Identity-SSPM (IdPs & NHI)", ""]
+    if not data.get("identity_sspm_licensed"):
+        lines.append("_Identity-SSPM is not provisioned on this tenant (HTTP 404/500)._")
+    elif not idps:
+        lines.append(
+            "_Identity-SSPM is provisioned but **no Identity Providers are connected** yet._"
+        )
+    else:
+        lines += ["| IdP | Type | Status |", "|---|---|---|"]
+        for idp in idps:
+            lines.append(
+                f"| {idp.get('display_name') or idp.get('name') or '—'} "
+                f"| {idp.get('idp_type') or idp.get('type') or '—'} "
+                f"| {idp.get('status') or idp.get('state') or '—'} |"
+            )
+    lines.append("")
+
+    if include_catalog and catalog:
+        lines += ["## Supported App Catalog", ""]
+        by_vertical: dict[str, list[str]] = {}
+        for capp in catalog:
+            name = capp.get("display_name") or capp.get("name") or "?"
+            for v in capp.get("verticals") or ["(uncategorised)"]:
+                by_vertical.setdefault(v, []).append(name)
+        for v in sorted(by_vertical):
+            names = sorted(set(by_vertical[v]))
+            lines.append(
+                f"- **{v}** ({len(names)}): {', '.join(names[:20])}"
+                + (" …" if len(names) > 20 else "")
+            )
+        lines.append("")
+
+    errors = data.get("extraction_errors") or []
+    if errors:
+        lines += ["## Extraction Warnings", ""] + [f"- `{e}`" for e in errors] + [""]
+    return "\n".join(lines)
 
 
 def register_posture_tools(mcp: FastMCP, get_client: Any) -> None:
@@ -398,3 +531,80 @@ def register_posture_tools(mcp: FastMCP, get_client: Any) -> None:
 
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc, tool='scm_posture_report', tenant_id=tenant_id)}"
+
+    @mcp.tool()
+    def scm_saas_posture(
+        tenant_id: str = "",
+        include_catalog: bool = False,
+        save_to: str = "",
+        load_from: str = "",
+    ) -> str:
+        """SaaS Security Posture (SSPM): app posture, findings, and IdPs.
+
+        Queries the SSPM API for onboarded SaaS applications with their
+        per-app misconfiguration findings (severity-ranked), the supported
+        app catalog, and Identity-SSPM IdP/NHI posture, and renders a
+        markdown summary. Unlicensed / unprovisioned tenants are reported
+        clearly rather than erroring.
+
+        Manual export/import:
+        - `save_to`: also write the raw posture snapshot (apps + findings +
+          IdPs + catalog) to a JSON file for archiving, diffing between
+          runs, or sharing.
+        - `load_from`: render a previously exported JSON file instead of
+          calling the API — offline review of an archived snapshot.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode). Ignored with load_from.
+            include_catalog: Also list the supported-app catalog by vertical.
+            save_to: Path to export the snapshot JSON to.
+            load_from: Path of a previous export to render instead of live data.
+
+        Returns:
+            Markdown posture summary (plus export confirmation when saved).
+        """
+        try:
+            if load_from:
+                data = json.loads(Path(load_from).read_text())
+                if data.get("format") != _SAAS_POSTURE_FORMAT:
+                    return (
+                        f"Error: {load_from} is not a saas-posture export "
+                        f"(expected format marker {_SAAS_POSTURE_FORMAT!r})"
+                    )
+                source = (
+                    f"imported file `{load_from}` — tenant {data.get('tenant_id', '?')}, "
+                    f"exported {_fmt_ts(data.get('exported_at'))}"
+                )
+            else:
+                from ..audit.extractor import extract_identity_sspm, extract_sspm
+                from ..audit.models import AuditSnapshot
+
+                client = get_client(tenant_id)
+                snap = AuditSnapshot(folder="", tenant_id=tenant_id or "default")
+                extract_sspm(client, snap)
+                extract_identity_sspm(client, snap)
+                data = {
+                    "format": _SAAS_POSTURE_FORMAT,
+                    "exported_at": datetime.now(UTC).isoformat(),
+                    "tenant_id": tenant_id or "default",
+                    "sspm_licensed": snap.sspm_licensed,
+                    "identity_sspm_licensed": snap.identity_sspm_licensed,
+                    "apps": snap.sspm_apps,
+                    "idps": snap.identity_sspm_idps,
+                    "catalog": snap.sspm_catalog,
+                    "extraction_errors": snap.extraction_errors,
+                }
+                source = f"live SSPM API, {_fmt_ts(data['exported_at'])}"
+
+            saved = ""
+            if save_to:
+                out = Path(save_to)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(json.dumps(data, indent=2, default=str))
+                saved = f"\n\n_Snapshot exported → `{out}` ({out.stat().st_size} bytes)_"
+
+            return _render_saas_posture(data, source, include_catalog) + saved
+        except Exception as exc:
+            return (
+                f"Error: {handle_scm_exception(exc, tool='scm_saas_posture', tenant_id=tenant_id)}"
+            )

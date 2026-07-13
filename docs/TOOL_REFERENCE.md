@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**119 tools** across 18 modules.
+**120 tools** across 18 modules.
 
 ## Table of Contents
 
@@ -2850,6 +2850,41 @@ Args:
 |-----------|------|---------|
 | `folder` | `str` | `'Shared'` |
 | `tenant_id` | `str` | `''` |
+
+### `scm_saas_posture`
+
+SaaS Security Posture (SSPM): app posture, findings, and IdPs.
+
+```
+Queries the SSPM API for onboarded SaaS applications with their
+per-app misconfiguration findings (severity-ranked), the supported
+app catalog, and Identity-SSPM IdP/NHI posture, and renders a
+markdown summary. Unlicensed / unprovisioned tenants are reported
+clearly rather than erroring.
+
+Manual export/import:
+- `save_to`: also write the raw posture snapshot (apps + findings +
+  IdPs + catalog) to a JSON file for archiving, diffing between
+  runs, or sharing.
+- `load_from`: render a previously exported JSON file instead of
+  calling the API — offline review of an archived snapshot.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode). Ignored with load_from.
+    include_catalog: Also list the supported-app catalog by vertical.
+    save_to: Path to export the snapshot JSON to.
+    load_from: Path of a previous export to render instead of live data.
+
+Returns:
+    Markdown posture summary (plus export confirmation when saved).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `include_catalog` | `bool` | `False` |
+| `save_to` | `str` | `''` |
+| `load_from` | `str` | `''` |
 
 ---
 

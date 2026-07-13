@@ -9,6 +9,15 @@ do about it.
 
 ## Recently shipped
 
+- **Standalone SaaS posture tool** (2026-07-13) — `scm_saas_posture`
+  surfaces the SSPM data that was previously buried in compliance
+  snapshots: onboarded apps with severity-ranked misconfig findings,
+  Identity-SSPM IdP/NHI posture, and catalog capability counts, with
+  manual JSON export (`save_to`) / offline import (`load_from`) using a
+  format-tagged snapshot. Live-validated on bt-showcase (SSPM licensed,
+  178-app catalog, zero apps onboarded — the tool renders the onboarding
+  guidance path) and bt-sase-test-lab (unlicensed → clear message). Also
+  added to the CLI Posture menu.
 - **Classic Prisma SD-WAN depth (round 2)** (2026-07-12) — three more
   read-only tools over the monitor API, live-validated on the 16-site lab:
   `sdwan_flows` (top talkers per site — sources/destinations/apps by bytes
@@ -155,12 +164,6 @@ built tools against yet, not in upstream drift._
   compliance snapshots). Application usage, bandwidth consumption, and user
   analytics across tenants are unused — prime candidates for NOC dashboard
   depth.
-- **Standalone SaaS posture tool** — `sase/sspm` (18 paths) +
-  `sase/identity-sspm` (17 paths) are currently only extracted into the
-  compliance snapshot (`extract_sspm`, `extract_identity_sspm`) for use inside
-  audit reports. There's no tool that surfaces SaaS app risk / identity
-  posture findings directly — worth a dedicated `scm_saas_posture`-style tool
-  rather than leaving it buried in compliance output.
 - **Insights 2.0 resource catalog** — `access/insights`, 103 paths across 7
   spec files; only ~5 queries are hardcoded today (connected users v2/v3,
   per-SPN throughput in `scm_spn_bandwidth`). Custom queries, scheduled

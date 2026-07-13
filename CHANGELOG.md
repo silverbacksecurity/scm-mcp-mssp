@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scm_saas_posture`** (`tools/posture.py`) — standalone SaaS Security Posture tool: onboarded SSPM apps with severity-ranked misconfiguration findings, Identity-SSPM IdP/NHI posture, and supported-app catalog capability counts (previously this data was only extracted inside compliance snapshots). Supports **manual export/import**: `save_to` writes the raw posture snapshot to JSON (format-tagged `scm-mcp-mssp/saas-posture@1`) for archiving/diffing, `load_from` renders a previous export offline without touching the API. Unlicensed (HTTP 500) and unprovisioned (404) tenants report clearly instead of erroring. CLI: new "SaaS Posture (SSPM)" entry in the Posture, Incidents & NOC menu with import/export prompts
 - **Classic SD-WAN depth (round 2)** (`tools/sdwan.py`):
   - **`sdwan_flows`** — top talkers per site from the flow log: top sources / destinations / applications by bytes (app IDs resolved via appdefs), per-path-type breakdown, and dropped-flow count. The flow monitor takes one site per request
   - **`sdwan_app_health`** — healthscore buckets (good/fair/poor) for sites, circuits, and anynet links; top-N applications and sites by a selectable basis (traffic volume, TCP/UDP flows, transaction failures, or media metrics like egress audio MOS); per-app healthscore detail where app monitoring is enabled

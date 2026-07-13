@@ -603,6 +603,11 @@ def _menu_posture_noc(
             _menu_table(
                 [
                     ("1", "Posture Report", "SCM Posture Management best-practice findings"),
+                    (
+                        "5",
+                        "SaaS Posture (SSPM)",
+                        "App misconfigs, IdP posture — export/import JSON",
+                    ),
                 ]
             )
         )
@@ -642,6 +647,8 @@ def _menu_posture_noc(
             _op_incident_summary(tenant, console, _pause)
         elif choice == "4":
             _op_tls_profile_manager(tenant, console, _pause)
+        elif choice == "5":
+            _op_saas_posture(tenant, console, _pause)
 
 
 # ── sub-menu: NCSC / NIST Remediation ─────────────────────────────────────
@@ -2265,6 +2272,35 @@ def _op_discover_tenants(tenant, console, _pause) -> None:
 
 
 # ── leaf operations: Posture & Incidents ───────────────────────────────────
+
+
+def _op_saas_posture(tenant, console, _pause) -> None:
+    from .tools.posture import register_posture_tools
+
+    load_from = Prompt.ask("Import from JSON export (blank = live API)", default="").strip()
+    save_to = ""
+    if not load_from:
+        save_to = Prompt.ask(
+            "Export snapshot to (blank = don't export)",
+            default="",
+        ).strip()
+    with console.status("[cyan]Building SaaS posture summary...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_posture_tools,
+                "scm_saas_posture",
+                tenant_id=tenant.tenant_id,
+                save_to=save_to,
+                load_from=load_from,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.startswith("Error"):
+        console.print(f"[red]{result}[/red]")
+    else:
+        console.print(Markdown(result))
+    _pause()
 
 
 def _op_posture_report(tenant, console, _pause) -> None:
