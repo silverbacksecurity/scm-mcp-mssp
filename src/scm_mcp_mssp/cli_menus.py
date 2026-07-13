@@ -598,6 +598,8 @@ def _menu_mssp_ops(
             _op_discover_tenants(tenant, console, _pause)
         elif choice == "17":
             _op_service_maintenance(tenant, console, _pause)
+        elif choice == "18":
+            _op_mt_analytics(tenant, console, _pause)
 
 
 # ── sub-menu: Posture & Incidents ──────────────────────────────────────────
@@ -1915,6 +1917,31 @@ def _op_airs_list(tenant, console, _pause) -> None:
 
 
 # ── leaf operations: MSSP Operations ───────────────────────────────────────
+
+
+def _op_mt_analytics(tenant, console, _pause) -> None:
+    from .tools.mt_monitor import register_mt_monitor_tools
+
+    view = Prompt.ask(
+        "View", choices=["apps", "threats", "connectivity", "incidents"], default="apps"
+    )
+    with console.status("[cyan]Querying cross-tenant analytics...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_mt_monitor_tools,
+                "scm_mt_analytics",
+                tenant_id=tenant.tenant_id,
+                view=view,
+                days=30,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.lstrip().startswith(("{", "[")):
+        console.print_json(result)
+    else:
+        console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
+    _pause()
 
 
 def _op_service_maintenance(tenant, console, _pause) -> None:

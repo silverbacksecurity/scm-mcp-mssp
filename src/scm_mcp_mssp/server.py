@@ -29,6 +29,7 @@ from .tools.deployment import register_deployment_tools
 from .tools.dlp import register_dlp_tools
 from .tools.mssp import register_casb_dlp_tools, register_mssp_tools, register_ngfw_airs_tools
 from .tools.mt_interconnect import register_spi_tools
+from .tools.mt_monitor import register_mt_monitor_tools
 from .tools.ncsc_baseline import register_ncsc_tools
 from .tools.network import register_network_tools
 from .tools.objects import register_object_tools
@@ -163,6 +164,7 @@ def register_all_tools(
     register_pab_msp_tools(mcp, get_client)
     register_pab_tools(mcp, get_client)
     register_service_status_tools(mcp, get_client)
+    register_mt_monitor_tools(mcp, get_client)
 
 
 def create_server() -> FastMCP:

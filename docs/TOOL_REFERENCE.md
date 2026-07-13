@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**124 tools** across 20 modules.
+**125 tools** across 21 modules.
 
 ## Table of Contents
 
@@ -26,6 +26,7 @@ All tools authenticate via Bearer-token OAuth (SASE client credentials) configur
 - [Service Provider Interconnect](#service-provider-interconnect)
 - [Prisma Access Browser for MSP](#prisma-access-browser-for-msp)
 - [Utility](#utility)
+- [Mt Monitor](#mt-monitor)
 - [Pab](#pab)
 - [Service Status](#service-status)
 
@@ -3303,6 +3304,53 @@ Returns:
 | Parameter | Type | Default |
 |-----------|------|---------|
 | `delay_seconds` | `int` | `3` |
+
+---
+
+## Mt Monitor
+
+_Cross-tenant aggregate monitoring — the `sase/mt-monitor` family._
+
+### `scm_mt_analytics`
+
+Cross-tenant analytics aggregated over the MSP tenant hierarchy.
+
+```
+Queries the MT Monitor aggregation API with `agg_by=tenant`, so a
+parent (MSSP) tenant answers for itself and all child tenants.
+
+Views:
+- apps: total / risky / blocked application counts.
+- threats: total and blocked threat counts (Critical/High/Medium).
+- connectivity: site counts by node type and up/down state per
+  child tenant.
+- incidents: raised incident counts by severity.
+
+(applications/list and locationsUsers are omitted: both reject or
+500 on the spec's own example payloads — revisit on a spec update.)
+
+Data resides in a CDL region (X-PANW-Region). If `region` is not
+given, the tenant's insights_region is mapped (eu→europe etc.) and
+its eu/uk sibling is also tried, keeping the first non-empty
+answer — e.g. BT lab tenants say `eu` but hold data in `uk`.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP parent).
+    view: apps | threats | connectivity | incidents.
+    days: Look-back window in days (default 7).
+    region: CDL region override (de, americas, europe, uk, sg,
+        ca, jp, au, in).
+
+Returns:
+    JSON with the view's result sets and the region that answered.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `view` | `str` | `'apps'` |
+| `days` | `int` | `7` |
+| `region` | `str` | `''` |
 
 ---
 

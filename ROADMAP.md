@@ -9,6 +9,16 @@ do about it.
 
 ## Recently shipped
 
+- **Cross-tenant analytics (mt-monitor)** (2026-07-13) — `scm_mt_analytics`
+  over the aggregation API: apps/threats/connectivity/incidents rolled up
+  across the tenant hierarchy (`agg_by=tenant`), with CDL-region discovery
+  (insights_region mapped + eu/uk sibling fallback; BT labs store in `uk`).
+  Query language: `{"filter":{"rules":[...]},"properties":[...]}` from the
+  spec examples — but `applications/list` 400s and `locationsUsers` 500s
+  on the spec's own examples; revisit on a spec refresh. mt-notifications
+  gateway path found (`/mt/notifications/api/cloud/2.0/...`) but 403 for
+  current service accounts — joins the RBAC-blocked list.
+
 - **PAN service-status / maintenance awareness** (2026-07-13) —
   `scm_service_maintenance` over the public status.paloaltonetworks.com
   Statuspage API (no auth/licence/RBAC; works when tenant APIs are down).
@@ -194,14 +204,15 @@ built tools against yet, not in upstream drift._
   validation (same pattern as SPI — don't scaffold blind against a spec with
   no lab account to test 401/403 handling against).
 - **Multitenant Notifications** — `sase/mt-notifications`, 10 paths, **zero
-  tooling**. A tenant-level alert/notification feed is a natural NOC-dashboard
-  fit (proactive alerting rather than pull-based polling) and nothing else in
-  this roadmap depends on it, so it can be picked up independently.
-- **Aggregate monitoring expansion** — `sase/mt-monitor`, 36 paths; only the
-  alerts sub-resource is wired (`extract_mt_monitor_alerts`, used in
-  compliance snapshots). Application usage, bandwidth consumption, and user
-  analytics across tenants are unused — prime candidates for NOC dashboard
-  depth.
+  tooling**. Gateway path confirmed live 2026-07-13
+  (`/mt/notifications/api/cloud/2.0/agg/notifications/*`) but current
+  service accounts get 403 Access denied — blocked on an MSP notifications
+  role, same class as Insights `tunnel_list`.
+- **Aggregate monitoring round 2** — `scm_mt_analytics` (2026-07-13, see
+  Recently shipped) covers apps/threats/connectivity/incidents. Still
+  unused: applicationUsage, urlLogs, upgrades/list, location trends, the
+  custom license quota/utilization GETs, and the two endpoints that fail
+  on their own spec examples (`applications/list`, `locationsUsers`).
 - **Insights 2.0 resource catalog** — `access/insights`, 103 paths across 7
   spec files; only ~5 queries are hardcoded today (connected users v2/v3,
   per-SPN throughput in `scm_spn_bandwidth`). Custom queries, scheduled

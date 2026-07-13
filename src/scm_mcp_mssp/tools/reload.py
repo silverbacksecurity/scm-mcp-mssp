@@ -67,6 +67,7 @@ _RELOAD_ORDER = [
     "scm_mcp_mssp.tools.mssp",
     "scm_mcp_mssp.tools.mt_interconnect",
     "scm_mcp_mssp.tools.pab",
+    "scm_mcp_mssp.tools.mt_monitor",
     "scm_mcp_mssp.tools.pab_msp",
     "scm_mcp_mssp.tools.service_status",
     "scm_mcp_mssp.tools.sdwan",
