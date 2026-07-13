@@ -176,3 +176,33 @@ def test_status_banner_swallows_fetch_errors(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(ss_mod, "_fetch", boom)
     assert ss_mod.status_banner() == []
+
+
+def test_cli_status_light_degraded_and_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    import scm_mcp_mssp.cli as cli
+
+    calls = {"n": 0}
+
+    def fetch(path: str, timeout: Any = None) -> Any:
+        calls["n"] += 1
+        return FEED[path]
+
+    monkeypatch.setattr(ss_mod, "_fetch", fetch)
+    cli._status_light_cache.update(ts=0.0, line="")
+    line = cli._scm_status_light()
+    assert line.startswith("🟡 PAN cloud: Partially Degraded Service")
+    assert "1 SASE incident(s)" in line
+    first_calls = calls["n"]
+    assert cli._scm_status_light() == line  # cached — no refetch
+    assert calls["n"] == first_calls
+
+
+def test_cli_status_light_unreachable_grey(monkeypatch: pytest.MonkeyPatch) -> None:
+    import scm_mcp_mssp.cli as cli
+
+    def boom(path: str, timeout: Any = None) -> Any:
+        raise OSError("down")
+
+    monkeypatch.setattr(ss_mod, "_fetch", boom)
+    cli._status_light_cache.update(ts=0.0, line="")
+    assert cli._scm_status_light() == "⚪ PAN cloud: status unavailable"

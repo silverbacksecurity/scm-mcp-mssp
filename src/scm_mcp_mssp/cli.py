@@ -241,9 +241,47 @@ def _exc_str(exc: Exception) -> str:
 
 # ── main menu ──────────────────────────────────────────────────────────────
 
+_status_light_cache: dict[str, Any] = {"ts": 0.0, "line": ""}
+
+
+def _scm_status_light() -> str:
+    """Traffic-light PAN cloud status line for the main menu.
+
+    Public statuspage feed, no tenant credentials; cached 5 minutes so menu
+    redraws don't refetch, and failures degrade to a grey light rather than
+    slowing or breaking the menu.
+    """
+    import time
+
+    if time.time() - _status_light_cache["ts"] < 300:
+        return _status_light_cache["line"]
+    try:
+        from .tools.service_status import _INDICATOR_EMOJI, _fetch, _is_sase_relevant, _text_of
+
+        status = _fetch("status.json", timeout=(2, 5)).get("status", {})
+        indicator = status.get("indicator") or "none"
+        emoji = "🟢" if indicator == "none" else _INDICATOR_EMOJI.get(indicator, "🟡")
+        line = f"{emoji} PAN cloud: {status.get('description', 'Operational')}"
+        if indicator != "none":
+            incidents = [
+                i
+                for i in _fetch("incidents/unresolved.json", timeout=(2, 5)).get("incidents", [])
+                if _is_sase_relevant(_text_of(i))
+            ]
+            if incidents:
+                line += (
+                    f"  │  {len(incidents)} SASE incident(s) — see MSSP Ops → PAN Service Status"
+                )
+    except Exception:
+        line = "⚪ PAN cloud: status unavailable"
+    _status_light_cache.update(ts=time.time(), line=line)
+    return line
+
 
 def _print_main_menu(tenant: TenantConfig | None) -> None:
     _print_banner(tenant)
+    console.print(Align.center(Text(_scm_status_light(), style="dim")))
+    console.print()
     _section("CONFIG & INVENTORY")
     console.print(
         _menu_table(
