@@ -2063,6 +2063,147 @@ def check_ngw_003(snap: AuditSnapshot) -> Finding:
 
 # ── Check Registry ───────────────────────────────────────────────────────────
 
+# ── Prisma Access Browser / endpoint posture ────────────────────────────────
+
+_PAB_POSTURE_FIELDS = (
+    ("screenLockStatus", "screen lock"),
+    ("diskEncryptionStatus", "disk encryption"),
+    ("firewallStatus", "firewall"),
+)
+
+
+def _pab_posture_ok(value: Any) -> bool:
+    return bool(value) and str(value).endswith("Enabled")
+
+
+def check_pab_001(snap: AuditSnapshot) -> Finding:
+    """BPA-PAB-001: enrolled Prisma Browser devices must pass endpoint posture."""
+    cid = "BPA-PAB-001"
+    if not snap.browser_devices:
+        return Finding(
+            check_id=cid,
+            title="Browser device posture baseline",
+            severity=Severity.MEDIUM,
+            status=Status.SKIP,
+            description=(
+                "No Prisma Access Browser devices enrolled (or PAB not provisioned) — "
+                "skipping browser endpoint posture check."
+            ),
+            remediation="",
+            pan_bpa_ref=cid,
+            ncsc_refs=_ncsc(cid),
+        )
+    failing = []
+    for d in snap.browser_devices:
+        missing = [label for key, label in _PAB_POSTURE_FIELDS if not _pab_posture_ok(d.get(key))]
+        if missing:
+            name = d.get("hostname") or d.get("id") or "<unknown>"
+            failing.append(f"{name} (missing: {', '.join(missing)})")
+    total = len(snap.browser_devices)
+    if not failing:
+        return Finding(
+            check_id=cid,
+            title="Browser devices meet posture baseline",
+            severity=Severity.HIGH,
+            status=Status.PASS,
+            description=(
+                f"All {total} enrolled Prisma Browser device(s) have screen lock, "
+                "disk encryption, and a host firewall enabled."
+            ),
+            remediation="",
+            pan_bpa_ref=cid,
+            ncsc_refs=_ncsc(cid),
+        )
+    return Finding(
+        check_id=cid,
+        title="Browser devices failing posture baseline",
+        severity=Severity.HIGH,
+        status=Status.FAIL,
+        description=(
+            f"{len(failing)} of {total} enrolled Prisma Browser device(s) lack one or "
+            "more baseline endpoint controls (screen lock, disk encryption, host "
+            "firewall). These devices access organisational SaaS/web apps through the "
+            "managed browser without meeting Cyber Essentials secure-configuration "
+            "expectations."
+        ),
+        remediation=(
+            "Enforce device posture in the Prisma Access Browser console: create a "
+            "device-posture policy requiring screen lock, disk encryption, and an "
+            "active host firewall, and restrict or step-up access for non-compliant "
+            "devices. Remediate the listed endpoints via MDM/OS policy."
+        ),
+        affected_objects=failing[:25],
+        pan_bpa_ref=cid,
+        ncsc_refs=_ncsc(cid),
+    )
+
+
+def check_pab_002(snap: AuditSnapshot) -> Finding:
+    """BPA-PAB-002: active enrolled browser devices should not be stale (>90 days unseen)."""
+    cid = "BPA-PAB-002"
+    if not snap.browser_devices:
+        return Finding(
+            check_id=cid,
+            title="Stale browser device enrolments",
+            severity=Severity.LOW,
+            status=Status.SKIP,
+            description=(
+                "No Prisma Access Browser devices enrolled (or PAB not provisioned) — "
+                "skipping stale-enrolment check."
+            ),
+            remediation="",
+            pan_bpa_ref=cid,
+            ncsc_refs=_ncsc(cid),
+        )
+    from datetime import UTC, datetime, timedelta
+
+    cutoff = datetime.now(UTC) - timedelta(days=90)
+    stale = []
+    for d in snap.browser_devices:
+        if d.get("status") != "active":
+            continue
+        last_seen = str(d.get("lastSeen") or "")
+        try:
+            seen_dt = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if seen_dt < cutoff:
+            name = d.get("hostname") or d.get("id") or "<unknown>"
+            stale.append(f"{name} (last seen {last_seen[:10]})")
+    if not stale:
+        return Finding(
+            check_id=cid,
+            title="No stale browser device enrolments",
+            severity=Severity.LOW,
+            status=Status.PASS,
+            description=(
+                f"All active enrolled browser device(s) out of "
+                f"{len(snap.browser_devices)} have connected within the last 90 days."
+            ),
+            remediation="",
+            pan_bpa_ref=cid,
+            ncsc_refs=_ncsc(cid),
+        )
+    return Finding(
+        check_id=cid,
+        title="Stale browser device enrolments",
+        severity=Severity.LOW,
+        status=Status.FAIL,
+        description=(
+            f"{len(stale)} active enrolled browser device(s) have not connected in "
+            "over 90 days. Stale enrolments inflate the trusted-device inventory and "
+            "may represent lost, retired, or re-imaged endpoints that retain access."
+        ),
+        remediation=(
+            "Review the listed devices in the Prisma Access Browser console and "
+            "archive or delete enrolments that are no longer in service."
+        ),
+        affected_objects=stale[:25],
+        pan_bpa_ref=cid,
+        ncsc_refs=_ncsc(cid),
+    )
+
+
 _ALL_CHECKS = [
     check_sr_001,
     check_sr_002,
@@ -2107,6 +2248,9 @@ _ALL_CHECKS = [
     check_ngw_001,
     check_ngw_002,
     check_ngw_003,
+    # Prisma Access Browser / endpoint posture
+    check_pab_001,
+    check_pab_002,
 ]
 
 

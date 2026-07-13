@@ -922,7 +922,7 @@ def register_mssp_tools(mcp: FastMCP, get_client: Any, get_settings: Any) -> Non
 
 _SCM_CONFIG_BASE = "https://api.sase.paloaltonetworks.com/config/v1"
 _ZTNA_BASE = "https://api.sase.paloaltonetworks.com/sse/connector/v2.0/api"
-_BROWSER_BASE = "https://api.sase.paloaltonetworks.com/seb/api/v1"
+_BROWSER_BASE = "https://api.sase.paloaltonetworks.com/seb-api/v1"
 
 
 _NOT_LICENSED_STATUSES = frozenset({401, 403, 404, 424})

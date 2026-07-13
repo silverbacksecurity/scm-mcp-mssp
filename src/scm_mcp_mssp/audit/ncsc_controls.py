@@ -306,6 +306,20 @@ NCSC_CONTROLS: dict[str, NcscControl] = {
             "inventory must include software version and patch status."
         ),
     ),
+    "CE-SC-1": NcscControl(
+        id="CE-SC-1",
+        title="Secure Configuration — Device Baseline",
+        source="CE v3.2",
+        objective="Secure Configuration",
+        description=(
+            "In-scope devices must be securely configured: authentication "
+            "(screen lock / password) enforced before device access, full-disk "
+            "encryption on devices holding organisational data, and a "
+            "host-based firewall enabled. Where a managed browser (Prisma "
+            "Access Browser) is the access boundary, its device-posture "
+            "signals evidence this control for enrolled endpoints."
+        ),
+    ),
 }
 
 
@@ -361,6 +375,9 @@ BPA_TO_NCSC: dict[str, list[str]] = {
     "BPA-HIP-001": ["CAF-B6.a", "CE-PATCH-1"],
     "BPA-HIP-002": ["CAF-B5.a"],
     "BPA-HIP-003": ["CAF-B5.a", "CAF-C3.a", "NSF-ZT-1"],
+    # Prisma Access Browser / endpoint posture
+    "BPA-PAB-001": ["CAF-B5.a", "CE-SC-1"],
+    "BPA-PAB-002": ["CAF-B5.a"],
     # NGFW device health
     "BPA-NGW-001": ["CAF-B6.a", "CAF-C1.a"],
     "BPA-NGW-002": ["CAF-B6.a", "CE-PATCH-1"],

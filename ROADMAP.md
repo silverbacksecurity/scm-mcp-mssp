@@ -9,6 +9,16 @@ do about it.
 
 ## Recently shipped
 
+- **PAB evidence in CE/NCSC CAF compliance** (2026-07-13) — BPA-PAB-001
+  (browser device posture baseline: screen lock + disk encryption + host
+  firewall → CAF-B5.a + new CE-SC-1 Secure Configuration control) and
+  BPA-PAB-002 (stale enrolments >90 days → CAF-B5.a), skipping cleanly on
+  unprovisioned tenants. Completes "PAB posture in tenant reporting".
+  Also fixed a latent bug found on the way: `extract_browser` pointed at
+  `/seb/api/v1` (404, silently empty) instead of `/seb-api/v1` — every
+  browser_* snapshot field and the AS-BUILT §5 browser section had been
+  empty since the extractor existed; real data now flows (14 users / 8
+  devices / 100 apps on the lab MSSP tenant).
 - **PAB in the NOC dashboard** (2026-07-13) — `scm_tenant_dashboard`
   gained a PAB column (`14u/8d (62%✓)` = users/devices/share of devices
   passing all three posture checks) from single-page `/seb-api` pulls
@@ -190,11 +200,6 @@ built tools against yet, not in upstream drift._
   (interconnects, VLAN attachments, IP pools) and an SPI health column in the
   NOC dashboard. Blocked on access to an SPI-enrolled MSP-mode service
   account for live validation (current accounts get 401 on `/mt/sp-interconnect/*`).
-- **PAB evidence in compliance reports** — the dashboard half of "PAB
-  posture in tenant reporting" shipped 2026-07-13 (PAB users/devices/
-  posture-✓ column in `scm_tenant_dashboard`); what remains is wiring PAB
-  device-posture and block-report evidence into the Cyber Essentials /
-  NCSC CAF browser-security controls.
 - **Spec-schema request validation** — validate raw-REST query/body params
   against the OpenAPI schemas before calling (fewer opaque 400s).
 - **Newly catalogued small families — scope before building** — `dlp`

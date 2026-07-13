@@ -790,7 +790,7 @@ def extract_licenses(client: Any, snap: AuditSnapshot) -> AuditSnapshot:
 _SCM_API_HOST = "https://api.sase.paloaltonetworks.com"
 _SCM_CONFIG_BASE = f"{_SCM_API_HOST}/config/v1"
 _ZTNA_BASE = f"{_SCM_API_HOST}/sse/connector/v2.0/api"
-_BROWSER_BASE = f"{_SCM_API_HOST}/seb/api/v1"
+_BROWSER_BASE = f"{_SCM_API_HOST}/seb-api/v1"
 
 
 _NOT_LICENSED_STATUSES = frozenset({401, 403, 404, 424})
