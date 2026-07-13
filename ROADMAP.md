@@ -9,6 +9,12 @@ do about it.
 
 ## Recently shipped
 
+- **PAB in the NOC dashboard** (2026-07-13) — `scm_tenant_dashboard`
+  gained a PAB column (`14u/8d (62%✓)` = users/devices/share of devices
+  passing all three posture checks) from single-page `/seb-api` pulls
+  inside the existing parallel poll. First live run flagged a lab tenant
+  at 14% posture compliance. More tenants turned out to be
+  PAB-provisioned than the licence API implies (5 of 9 serving data).
 - **PAB tenant depth** (2026-07-13) — `scm_pab_inventory` /
   `scm_pab_apps` / `scm_pab_user_requests` over the previously untooled
   `access/browser-mgmt` family (33 paths, `/seb-api/v1/*`). Users,
@@ -184,9 +190,11 @@ built tools against yet, not in upstream drift._
   (interconnects, VLAN attachments, IP pools) and an SPI health column in the
   NOC dashboard. Blocked on access to an SPI-enrolled MSP-mode service
   account for live validation (current accounts get 401 on `/mt/sp-interconnect/*`).
-- **PAB posture in tenant reporting** — PAB summary columns in
-  `scm_tenant_dashboard`; PAB block-report evidence wired into Cyber
-  Essentials / NCSC CAF browser-security controls.
+- **PAB evidence in compliance reports** — the dashboard half of "PAB
+  posture in tenant reporting" shipped 2026-07-13 (PAB users/devices/
+  posture-✓ column in `scm_tenant_dashboard`); what remains is wiring PAB
+  device-posture and block-report evidence into the Cyber Essentials /
+  NCSC CAF browser-security controls.
 - **Spec-schema request validation** — validate raw-REST query/body params
   against the OpenAPI schemas before calling (fewer opaque 400s).
 - **Newly catalogued small families — scope before building** — `dlp`

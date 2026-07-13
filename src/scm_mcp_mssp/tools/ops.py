@@ -1158,6 +1158,9 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
             Rules         — security rule count (pre-rulebase, Shared folder)
             RNs           — remote network (branch) count
             Tunnels       — IKE gateway count
+            PAB           — Prisma Access Browser: enrolled users/devices and the
+                            share of devices passing all posture checks (screen
+                            lock + disk encryption + firewall); — if unprovisioned
             Nearest Expiry — soonest licence expiry date (see include_expired)
             Days          — days until that expiry
             Lic           — licence RAG status
@@ -1190,8 +1193,8 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
             "",
             f"**Generated:** {ts}  | **Tenants:** {len(tenant_cfgs)}",
             "",
-            "| Tenant | Rules | RNs | Tunnels | Nearest Expiry | Days | Lic | Errors | RAG |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| Tenant | Rules | RNs | Tunnels | PAB | Nearest Expiry | Days | Lic | Errors | RAG |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
 
         # Build each tenant's row in parallel under a hard wall-clock budget.
@@ -1204,7 +1207,7 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
             try:
                 client = get_scm_client(tc)
             except Exception:
-                return f"| **{tc.label}** | — | — | — | — | — | ⚪ | Auth failed | 🔴 |"
+                return f"| **{tc.label}** | — | — | — | — | — | — | ⚪ | Auth failed | 🔴 |"
 
             session = getattr(client, "session", None)
             rules = _quick_list(
@@ -1222,6 +1225,30 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
                 lics = []
             min_days, min_exp_str = _nearest_licence_expiry(lics, include_expired)
 
+            # PAB posture — single-page pulls; unprovisioned tenants show "—"
+            pab = "—"
+            try:
+                from .pab import _get_json as _pab_get
+                from .pab import _posture_ok
+
+                st_u, ub = _pab_get(client, "users", {"limit": 200})
+                st_d, db = _pab_get(client, "devices", {"limit": 200})
+                if st_u == 200 and isinstance(ub, dict):
+                    pab_users = ub.get("data") or []
+                    devs = (db.get("data") or []) if st_d == 200 and isinstance(db, dict) else []
+                    if pab_users or devs:
+                        ok = sum(
+                            1
+                            for d in devs
+                            if _posture_ok(d.get("screenLockStatus"))
+                            and _posture_ok(d.get("diskEncryptionStatus"))
+                            and _posture_ok(d.get("firewallStatus"))
+                        )
+                        pct = f" ({round(100 * ok / len(devs))}%✓)" if devs else ""
+                        pab = f"{len(pab_users)}u/{len(devs)}d{pct}"
+            except Exception:
+                pass
+
             lic_st = _status(min_days)
             lic_emoji = _STATUS_EMOJI.get(lic_st, "⚪")
             days_s = str(min_days) if min_days is not None else "?"
@@ -1235,7 +1262,7 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
                 rag = "🟢"
 
             return (
-                f"| **{tc.label}** | {len(rules)} | {len(rns)} | {len(tunnels)} "
+                f"| **{tc.label}** | {len(rules)} | {len(rns)} | {len(tunnels)} | {pab} "
                 f"| {min_exp_str} | {days_s} | {lic_emoji} {lic_st} | 0 | {rag} |"
             )
 
@@ -1252,12 +1279,14 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
                 try:
                     rows_by_label[label] = fut.result()
                 except Exception:
-                    rows_by_label[label] = f"| **{label}** | — | — | — | — | — | ⚪ | Error | 🔴 |"
+                    rows_by_label[label] = (
+                        f"| **{label}** | — | — | — | — | — | — | ⚪ | Error | 🔴 |"
+                    )
             for fut in not_done:
                 label = fut_to_label[fut]
                 fut.cancel()
                 rows_by_label[label] = (
-                    f"| **{label}** | — | — | — | — | — | ⏱ | Slow/skipped | 🟡 |"
+                    f"| **{label}** | — | — | — | — | — | — | ⏱ | Slow/skipped | 🟡 |"
                 )
         finally:
             pool.shutdown(wait=False)
@@ -1266,7 +1295,7 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
         for tc in tenant_cfgs.values():
             lines.append(
                 rows_by_label.get(
-                    tc.label, f"| **{tc.label}** | — | — | — | — | — | ⚪ | No data | 🔴 |"
+                    tc.label, f"| **{tc.label}** | — | — | — | — | — | — | ⚪ | No data | 🔴 |"
                 )
             )
 

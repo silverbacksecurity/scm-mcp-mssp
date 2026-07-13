@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **PAB column in `scm_tenant_dashboard`** (`tools/ops.py`) — the NOC dashboard now shows Prisma Access Browser adoption and posture per tenant: `<users>u/<devices>d (<pct>%✓)` where the percentage is the share of devices passing **all three** posture checks (screen lock + disk encryption + firewall); unprovisioned tenants show "—". Single-page pulls inside the existing parallel per-tenant poll, so the 25 s dashboard budget is unaffected. First live run immediately surfaced a real gap: one lab tenant at 14% device posture compliance
 - **PAB tenant depth** (`tools/pab.py`) — three read-only tools over the previously untooled `access/browser-mgmt` family (`/seb-api/v1/*`, 33 paths):
   - **`scm_pab_inventory`** — enrolled browser users, device inventory with endpoint posture (screen lock / disk encryption / firewall, mapped to booleans), user/device groups, and a summary view with posture-compliance roll-up; cursor pagination followed automatically
   - **`scm_pab_apps`** — configured application catalog (type/name filters), application categories, and app groups

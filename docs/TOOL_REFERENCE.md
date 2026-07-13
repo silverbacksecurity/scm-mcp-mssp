@@ -2599,6 +2599,9 @@ Columns:
     Rules         — security rule count (pre-rulebase, Shared folder)
     RNs           — remote network (branch) count
     Tunnels       — IKE gateway count
+    PAB           — Prisma Access Browser: enrolled users/devices and the
+                    share of devices passing all posture checks (screen
+                    lock + disk encryption + firewall); — if unprovisioned
     Nearest Expiry — soonest licence expiry date (see include_expired)
     Days          — days until that expiry
     Lic           — licence RAG status
