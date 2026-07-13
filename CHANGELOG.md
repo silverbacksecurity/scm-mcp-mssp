@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-13
+
 ### Added
 - **CLI: traffic-light PAN cloud status on the main menu** (`cli.py`) — the main menu banner now shows a live status light from the public statuspage feed (🟢 operational / 🟡🟠🔴 degraded with unresolved SASE incident count and a pointer to MSSP Ops → PAN Service Status; ⚪ when the feed is unreachable). Cached 5 minutes so menu redraws never refetch; short timeouts so a slow feed can't delay the menu
 - **`scm_mt_analytics`** (`tools/mt_monitor.py`) — cross-tenant analytics over the `sase/mt-monitor` aggregation API (`agg_by=tenant`: a parent MSSP tenant answers for itself and all children). Views: apps (total/risky/blocked counts — live: 277 apps, 127 risky), threats (total/blocked — live: 228/101), connectivity (site counts by node type and up/down state per child tenant), incidents (raised counts by severity). Data lives in a CDL region (`X-PANW-Region`); when no region is given the tenant's insights_region is mapped and its eu/uk sibling also tried — BT labs say `eu` but hold data in `uk`. `applications/list` and `locationsUsers` are omitted: both reject or 500 on the spec's own example payloads. CLI: "Cross-Tenant Analytics" in MSSP Operations. (mt-notifications probed too: gateway path is `/mt/notifications/api/cloud/2.0/...` but current service accounts get 403 — parked with the other RBAC-blocked items)
