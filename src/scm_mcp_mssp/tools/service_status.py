@@ -128,10 +128,66 @@ def _regions_for(text: str) -> list[str]:
     return [r for r, kws in _REGION_KEYWORDS.items() if _matches_any(text, kws)]
 
 
-def _fetch(path: str) -> Any:
-    resp = requests.get(f"{_STATUS_BASE}/{path}", timeout=_TIMEOUT)
+def _fetch(path: str, timeout: tuple[int, int] = _TIMEOUT) -> Any:
+    resp = requests.get(f"{_STATUS_BASE}/{path}", timeout=timeout)
     resp.raise_for_status()
     return resp.json()
+
+
+_INDICATOR_EMOJI = {"minor": "🟡", "major": "🟠", "critical": "🔴"}
+
+
+def status_banner(days: int = 7) -> list[str]:
+    """Markdown banner lines for the NOC dashboard.
+
+    Returns [] when PAN cloud status is healthy with nothing imminent, and
+    also on any fetch failure — the banner must never break or slow a
+    dashboard, so it uses short timeouts and swallows errors.
+    """
+    lines: list[str] = []
+    try:
+        fast = (3, 8)
+        status = _fetch("status.json", timeout=fast).get("status", {})
+        indicator = status.get("indicator") or "none"
+        incidents = [
+            i
+            for i in _fetch("incidents/unresolved.json", timeout=fast).get("incidents", [])
+            if _is_sase_relevant(_text_of(i))
+        ]
+        if indicator != "none" or incidents:
+            emoji = _INDICATOR_EMOJI.get(indicator, "🟡")
+            head = f"> {emoji} **PAN cloud status: {status.get('description', indicator)}**"
+            if incidents:
+                names = "; ".join(str(i.get("name", ""))[:70] for i in incidents[:2])
+                head += f" — {len(incidents)} unresolved SASE incident(s): {names}"
+            lines.append(head)
+
+        horizon = datetime.now(UTC) + timedelta(days=days)
+        wins = []
+        for m in _fetch("scheduled-maintenances/upcoming.json", timeout=fast).get(
+            "scheduled_maintenances", []
+        ):
+            if not _is_sase_relevant(_text_of(m)):
+                continue
+            sched = str(m.get("scheduled_for") or "")
+            try:
+                starts = datetime.fromisoformat(sched.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if starts <= horizon:
+                wins.append((starts, m))
+        if wins:
+            wins.sort(key=lambda x: x[0])
+            starts, first = wins[0]
+            more = f" (+{len(wins) - 1} more within {days}d)" if len(wins) > 1 else ""
+            lines.append(
+                f"> 🔧 Next SASE maintenance: {first.get('name')} — "
+                f"{starts.strftime('%Y-%m-%d %H:%M UTC')}{more}"
+            )
+    except Exception as exc:
+        logger.debug("status_banner_failed", error=str(exc))
+        return []
+    return lines
 
 
 def register_service_status_tools(mcp: FastMCP, get_client: Any) -> None:

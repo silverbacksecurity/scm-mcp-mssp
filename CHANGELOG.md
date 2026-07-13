@@ -8,14 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **PAN status banner on `scm_tenant_dashboard`** (`tools/ops.py`, `tools/service_status.py`) — when the PAN cloud status indicator is degraded, unresolved SASE incidents exist, or SASE maintenance is due within 7 days, the NOC dashboard shows a banner between the header and the tenant table (`🟡 PAN cloud status … — N unresolved SASE incident(s)` / `🔧 Next SASE maintenance …`). Fetched concurrently with the tenant rows via the shared `status_banner()` helper (short timeouts, silent on failure), so a slow or unreachable status page can never delay or break the dashboard. Healthy + quiet = no banner
 - **`scm_service_maintenance`** (`tools/service_status.py`) — maintenance-window awareness from the public status.paloaltonetworks.com feed (Atlassian Statuspage; no auth/licence/RBAC, works even when tenant APIs are down): upcoming + in-progress scheduled maintenance filtered to the SASE/SCM product families this server manages (drops Prisma Cloud/Cortex noise — 26 raw windows → 6 relevant on first live run), matched against tenant regions via `TenantConfig.insights_region` with global windows always included; also reports the page's overall indicator and unresolved SASE incidents (live run surfaced the current Cloud NGFW Azure/AWS degradations). `all_tenants=true` groups windows per configured tenant. CLI: "PAN Service Status" entry in MSSP Operations
 - **PAB evidence in CE/NCSC CAF compliance** (`audit/bpa_checks.py`, `audit/ncsc_controls.py`):
   - **BPA-PAB-001** (high) — every enrolled Prisma Browser device must pass the endpoint posture baseline (screen lock + disk encryption + host firewall); maps to CAF-B5.a and the new **CE-SC-1** (Secure Configuration — Device Baseline) control
   - **BPA-PAB-002** (low) — active browser enrolments unseen for >90 days are flagged as stale trusted-device inventory; maps to CAF-B5.a
   - Both checks skip cleanly when PAB is not provisioned; findings flow into the NCSC/CE gap reports automatically. First live run: 3/8 lab devices failing posture, 5 stale enrolments
-
-### Fixed
-- **`extract_browser` never returned data** (`audit/extractor.py`, `tools/mssp.py`) — `_BROWSER_BASE` pointed at `/seb/api/v1`, which 404s (silently treated as not-licensed), so every `browser_*` snapshot field and the AS-BUILT §5 Prisma Browser section have been empty since the extractor was added. The real path is `/seb-api/v1`; a data-rich tenant now extracts 14 users / 8 devices / 100 applications / 3 device groups
 - **PAB column in `scm_tenant_dashboard`** (`tools/ops.py`) — the NOC dashboard now shows Prisma Access Browser adoption and posture per tenant: `<users>u/<devices>d (<pct>%✓)` where the percentage is the share of devices passing **all three** posture checks (screen lock + disk encryption + firewall); unprovisioned tenants show "—". Single-page pulls inside the existing parallel per-tenant poll, so the 25 s dashboard budget is unaffected. First live run immediately surfaced a real gap: one lab tenant at 14% device posture compliance
 - **PAB tenant depth** (`tools/pab.py`) — three read-only tools over the previously untooled `access/browser-mgmt` family (`/seb-api/v1/*`, 33 paths):
   - **`scm_pab_inventory`** — enrolled browser users, device inventory with endpoint posture (screen lock / disk encryption / firewall, mapped to booleans), user/device groups, and a summary view with posture-compliance roll-up; cursor pagination followed automatically
@@ -49,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **SD-WAN element software version was always null** — elements carry `software_version`, not `sw_version`; fixed in `sdwan_list_elements`, `sdwan_topology`, and the AS-BUILT §4.1 edge-device inventory table, which all silently showed empty/Unknown versions
+- **`extract_browser` never returned data** (`audit/extractor.py`, `tools/mssp.py`) — `_BROWSER_BASE` pointed at `/seb/api/v1`, which 404s (silently treated as not-licensed), so every `browser_*` snapshot field and the AS-BUILT §5 Prisma Browser section have been empty since the extractor was added. The real path is `/seb-api/v1`; a data-rich tenant now extracts 14 users / 8 devices / 100 applications / 3 device groups
 
 ## [0.9.0] - 2026-07-09
 

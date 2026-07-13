@@ -15,8 +15,10 @@ do about it.
   SASE-product filtering (26 raw windows → 6 relevant on first run),
   region matching against `TenantConfig.insights_region` (global windows
   always included), per-tenant grouping, plus the page's overall
-  indicator and unresolved SASE incidents. Follow-up candidate: a status
-  banner line on `scm_tenant_dashboard` when the indicator degrades.
+  indicator and unresolved SASE incidents. Same day: `status_banner()`
+  now renders on `scm_tenant_dashboard` when status degrades, SASE
+  incidents are open, or maintenance is due within 7 days — fetched
+  concurrently, silent on failure, absent when healthy.
 - **PAB evidence in CE/NCSC CAF compliance** (2026-07-13) — BPA-PAB-001
   (browser device posture baseline: screen lock + disk encryption + host
   firewall → CAF-B5.a + new CE-SC-1 Secure Configuration control) and

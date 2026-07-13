@@ -1188,6 +1188,15 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
             )
 
         ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+        # PAN cloud status banner — fetched concurrently with the tenant rows
+        # from the public statuspage feed; status_banner() returns [] when
+        # healthy or unreachable, so it can never break or block the dashboard.
+        from .service_status import status_banner
+
+        banner_pool = ThreadPoolExecutor(max_workers=1)
+        banner_fut = banner_pool.submit(status_banner)
+
         lines: list[str] = [
             "## MSSP Tenant Health Dashboard",
             "",
@@ -1290,6 +1299,16 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
                 )
         finally:
             pool.shutdown(wait=False)
+
+        try:
+            banner = banner_fut.result(timeout=5)
+        except Exception:
+            banner = []
+        finally:
+            banner_pool.shutdown(wait=False)
+        if banner:
+            # Slot the banner between the Generated line and the table header.
+            lines[4:4] = [*banner, ""]
 
         # Preserve the configured tenant order.
         for tc in tenant_cfgs.values():

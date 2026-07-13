@@ -146,3 +146,33 @@ def test_include_all_products(tool: Any) -> None:
     data = json.loads(tool(days=14, include_all_products=True))
     names = [w["name"] for w in data["maintenance_windows"]]
     assert "Prisma Cloud [APP.SG] - Scheduled maintenance" in names
+
+
+def test_status_banner_degraded_and_maintenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ss_mod, "_fetch", lambda path, timeout=None: FEED[path])
+    lines = ss_mod.status_banner(days=7)
+    assert len(lines) == 2
+    assert "PAN cloud status: Partially Degraded Service" in lines[0]
+    assert "1 unresolved SASE incident(s)" in lines[0]
+    assert "Cloud NGFW" in lines[0]
+    # nearest SASE window within 7d is the AU DLP one (day 2)
+    assert "Next SASE maintenance: Enterprise DLP: Australia Region Maintenance" in lines[1]
+    assert "+2 more within 7d" in lines[1]
+
+
+def test_status_banner_healthy_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    healthy = {
+        "status.json": {"status": {"indicator": "none", "description": "Operational"}},
+        "incidents/unresolved.json": {"incidents": []},
+        "scheduled-maintenances/upcoming.json": {"scheduled_maintenances": []},
+    }
+    monkeypatch.setattr(ss_mod, "_fetch", lambda path, timeout=None: healthy[path])
+    assert ss_mod.status_banner() == []
+
+
+def test_status_banner_swallows_fetch_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(path: str, timeout: Any = None) -> Any:
+        raise OSError("network down")
+
+    monkeypatch.setattr(ss_mod, "_fetch", boom)
+    assert ss_mod.status_banner() == []
