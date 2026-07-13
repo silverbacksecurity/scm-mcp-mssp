@@ -161,6 +161,35 @@ below. `pan-scm-sdk` is current (`pyproject.toml` pins `>=0.15.1`, matching
 PyPI latest). The gap right now is entirely in catalog families we haven't
 built tools against yet, not in upstream drift._
 
+- **SSR — Simple Service Requests (restricted customer-change CRUD)** — a
+  single two-phase tool (working name `scm_ssr_execute`) automating the three
+  commonest customer change requests: URL allow/block-listing, threat
+  exceptions (include/exclude a threat ID in anti-spyware / vulnerability
+  protection profiles), and SSL decryption include/exclude. All three reduce
+  to one primitive — add/remove an entry in a designated SSR-managed object —
+  so the "restricted to basic" property is structural, not policy: the tool
+  only edits objects named in a per-tenant allowlist in settings.toml (e.g.
+  `SSR-Allow-List` / `SSR-Block-List` / `SSR-Decrypt-Exclude` custom URL
+  categories referenced once by existing rules at onboarding; profile
+  `threat_exception` lists) and never touches a rulebase. Contract is
+  machine-first, unlike every existing tool: JSON in/out for playbook
+  branching, idempotent (re-adding an existing entry returns success +
+  `already_present`, safe under orchestrator retries), `dry_run=True` default
+  returning a before/after diff, mandatory `ticket_ref` echoed into the
+  object description and commit message so the config carries its own
+  provenance. Commit stays a separate explicit `scm_commit` step so the
+  orchestrator owns sign-off. Intake is external and swappable — ServiceNow
+  form or templated email → XSOAR playbook, or Teams form → Power
+  Automate / Copilot Studio (MCP-native since 2025) — all mapping to the same
+  dry-run diff → human approval → apply + commit flow. Validation stays
+  server-side regardless of front-end (strict URL syntax, no over-broad
+  wildcards, threat ID must exist; a compromised playbook still can't reach
+  past the allowlisted objects). Prerequisites: auth on the SSE transport
+  (bearer/mTLS — today the SSE port exposes every tool unauthenticated) and
+  ideally a restricted entrypoint registering only the SSR surface + commit
+  instead of the full tool set. SDK is ready now: `url_categories`,
+  `decryption_rule`, `anti_spyware_profile`, and
+  `vulnerability_protection_profile` all have full CRUD in pan-scm-sdk.
 - **Branch NAT IP, PA side (IKE peer IP per circuit)** — the SD-WAN side is
   done (see Recently shipped: element status `config_and_events_from` gives
   the post-NAT egress of the circuit the controller connection rides, and
