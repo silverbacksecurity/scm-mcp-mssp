@@ -39,6 +39,7 @@ from .tools.posture import register_posture_tools
 from .tools.reload import register_reload_tool
 from .tools.sdwan import register_sdwan_tools
 from .tools.security import register_security_tools
+from .tools.service_status import register_service_status_tools
 from .tools.setup import register_setup_tools
 from .utils.logging import configure_logging, get_logger
 
@@ -161,6 +162,7 @@ def register_all_tools(
     register_spi_tools(mcp, get_client)
     register_pab_msp_tools(mcp, get_client)
     register_pab_tools(mcp, get_client)
+    register_service_status_tools(mcp, get_client)
 
 
 def create_server() -> FastMCP:

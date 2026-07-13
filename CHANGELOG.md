@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scm_service_maintenance`** (`tools/service_status.py`) — maintenance-window awareness from the public status.paloaltonetworks.com feed (Atlassian Statuspage; no auth/licence/RBAC, works even when tenant APIs are down): upcoming + in-progress scheduled maintenance filtered to the SASE/SCM product families this server manages (drops Prisma Cloud/Cortex noise — 26 raw windows → 6 relevant on first live run), matched against tenant regions via `TenantConfig.insights_region` with global windows always included; also reports the page's overall indicator and unresolved SASE incidents (live run surfaced the current Cloud NGFW Azure/AWS degradations). `all_tenants=true` groups windows per configured tenant. CLI: "PAN Service Status" entry in MSSP Operations
 - **PAB evidence in CE/NCSC CAF compliance** (`audit/bpa_checks.py`, `audit/ncsc_controls.py`):
   - **BPA-PAB-001** (high) — every enrolled Prisma Browser device must pass the endpoint posture baseline (screen lock + disk encryption + host firewall); maps to CAF-B5.a and the new **CE-SC-1** (Secure Configuration — Device Baseline) control
   - **BPA-PAB-002** (low) — active browser enrolments unseen for >90 days are flagged as stale trusted-device inventory; maps to CAF-B5.a

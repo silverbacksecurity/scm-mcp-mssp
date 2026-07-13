@@ -9,6 +9,14 @@ do about it.
 
 ## Recently shipped
 
+- **PAN service-status / maintenance awareness** (2026-07-13) —
+  `scm_service_maintenance` over the public status.paloaltonetworks.com
+  Statuspage API (no auth/licence/RBAC; works when tenant APIs are down).
+  SASE-product filtering (26 raw windows → 6 relevant on first run),
+  region matching against `TenantConfig.insights_region` (global windows
+  always included), per-tenant grouping, plus the page's overall
+  indicator and unresolved SASE incidents. Follow-up candidate: a status
+  banner line on `scm_tenant_dashboard` when the indicator degrades.
 - **PAB evidence in CE/NCSC CAF compliance** (2026-07-13) — BPA-PAB-001
   (browser device posture baseline: screen lock + disk encryption + host
   firewall → CAF-B5.a + new CE-SC-1 Secure Configuration control) and

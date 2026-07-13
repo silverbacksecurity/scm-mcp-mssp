@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**123 tools** across 19 modules.
+**124 tools** across 20 modules.
 
 ## Table of Contents
 
@@ -27,6 +27,7 @@ All tools authenticate via Bearer-token OAuth (SASE client credentials) configur
 - [Prisma Access Browser for MSP](#prisma-access-browser-for-msp)
 - [Utility](#utility)
 - [Pab](#pab)
+- [Service Status](#service-status)
 
 ---
 
@@ -3402,3 +3403,45 @@ Returns:
 | `status` | `str` | `''` |
 | `request_type` | `str` | `''` |
 | `limit` | `int` | `50` |
+
+---
+
+## Service Status
+
+_Palo Alto Networks cloud service status — maintenance-window awareness._
+
+### `scm_service_maintenance`
+
+Upcoming PAN cloud maintenance windows relevant to your tenants.
+
+```
+Pulls scheduled (and in-progress) maintenance from the public
+status.paloaltonetworks.com API, keeps windows for the SASE/SCM
+product families this server manages, and matches each window
+against tenant regions (TenantConfig.insights_region: eu/us/uk/
+sg/au). Windows with no regional wording are treated as global.
+Also reports the page's overall status indicator and any
+unresolved incidents touching SASE products, so planned works and
+live degradations arrive in one view.
+
+No credentials are used — this is a public status feed and works
+even when tenant APIs are down (that being rather the point).
+
+Args:
+    tenant_id: Match windows for this tenant's region only.
+    days: Look-ahead horizon in days (default 14).
+    all_tenants: Group matching windows per configured tenant.
+    include_all_products: Skip the SASE product filter (include
+        Prisma Cloud, Cortex, etc.).
+
+Returns:
+    JSON with `overall_status`, `unresolved_incidents`, and
+    `maintenance_windows` (optionally per tenant).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `days` | `int` | `14` |
+| `all_tenants` | `bool` | `False` |
+| `include_all_products` | `bool` | `False` |

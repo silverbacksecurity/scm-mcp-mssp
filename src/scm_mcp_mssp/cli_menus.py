@@ -501,6 +501,11 @@ def _menu_mssp_ops(
                 [
                     ("1", "Tenant Dashboard", "Multi-tenant NOC traffic-light health view"),
                     ("2", "NOC Health Dashboard", "Cross-tenant health wallboard"),
+                    (
+                        "17",
+                        "PAN Service Status",
+                        "Upcoming maintenance + incidents per tenant region",
+                    ),
                 ]
             )
         )
@@ -591,6 +596,8 @@ def _menu_mssp_ops(
             _op_snippet_catalogue(tenant, console, _pause)
         elif choice == "16":
             _op_discover_tenants(tenant, console, _pause)
+        elif choice == "17":
+            _op_service_maintenance(tenant, console, _pause)
 
 
 # ── sub-menu: Posture & Incidents ──────────────────────────────────────────
@@ -1908,6 +1915,26 @@ def _op_airs_list(tenant, console, _pause) -> None:
 
 
 # ── leaf operations: MSSP Operations ───────────────────────────────────────
+
+
+def _op_service_maintenance(tenant, console, _pause) -> None:
+    from .tools.service_status import register_service_status_tools
+
+    with console.status("[cyan]Fetching PAN service status...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_service_status_tools,
+                "scm_service_maintenance",
+                all_tenants=True,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.lstrip().startswith(("{", "[")):
+        console.print_json(result)
+    else:
+        console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
+    _pause()
 
 
 def _op_mssp_tenant_dashboard(tenant, console, _pause) -> None:
