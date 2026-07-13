@@ -2402,8 +2402,9 @@ def extract_sdwan_wan_ips(
         if site_id not in circuit_by_site:
             try:
                 circuit_by_site[site_id] = {
-                    w.get("id"): w
+                    w["id"]: w
                     for w in safe_items(sdwan_client.get.waninterfaces(site_id=site_id))
+                    if w.get("id")
                 }
             except Exception as exc:
                 circuit_by_site[site_id] = {}
@@ -2543,7 +2544,13 @@ def annotate_wan_ip_drift(wan_ips: list[dict[str, Any]]) -> int:
             loc = rec.get("site_location") or {}
             s_lat, s_lon = loc.get("latitude"), loc.get("longitude")
             e_lat, e_lon = enr.get("latitude"), enr.get("longitude")
-            if None not in (s_lat, s_lon, e_lat, e_lon) and (s_lat, s_lon) != (0, 0):
+            if (
+                s_lat is not None
+                and s_lon is not None
+                and e_lat is not None
+                and e_lon is not None
+                and (s_lat, s_lon) != (0, 0)
+            ):
                 km = _haversine_km(s_lat, s_lon, e_lat, e_lon)
                 if km > _DRIFT_GEO_KM:
                     reasons.append(

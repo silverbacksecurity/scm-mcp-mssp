@@ -129,9 +129,11 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
 
     def _name_maps(sdk: Any) -> tuple[dict[str, str], dict[str, str]]:
         """Return {site_id: name} and {element_id: name} lookup maps."""
-        site_names = {s.get("id"): s.get("name", s.get("id")) for s in safe_items(sdk.get.sites())}
+        site_names = {
+            s["id"]: s.get("name", s["id"]) for s in safe_items(sdk.get.sites()) if s.get("id")
+        }
         elem_names = {
-            e.get("id"): e.get("name") or e.get("id") for e in safe_items(sdk.get.elements())
+            e["id"]: e.get("name") or e["id"] for e in safe_items(sdk.get.elements()) if e.get("id")
         }
         return site_names, elem_names
 
@@ -1185,7 +1187,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                 rec: dict[str, Any] = {
                     "element_id": eid,
                     "element_name": e.get("name") or eid,
-                    "site_name": site_names.get(e.get("site_id"), e.get("site_id")),
+                    "site_name": site_names.get(e.get("site_id") or "", e.get("site_id")),
                     "model": e.get("model_name"),
                     "serial": e.get("serial_number"),
                     "connected": e.get("connected"),
@@ -1599,8 +1601,9 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
     def _app_names(sdk: Any) -> dict[str, str]:
         """Return {appdef_id: display name} for resolving flow/top-N app IDs."""
         return {
-            a.get("id"): a.get("display_name") or a.get("name") or a.get("id")
+            a["id"]: a.get("display_name") or a.get("name") or a["id"]
             for a in safe_items(sdk.get.appdefs())
+            if a.get("id")
         }
 
     # ── Flows (top talkers) ───────────────────────────────────────────────────
@@ -1797,10 +1800,11 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
             app_healthscores: list[dict[str, Any]] = []
             if getattr(app_hs_resp, "sdk_status", False):
                 body = app_hs_resp.json() or {}
-                rows = body.get("response") if isinstance(body.get("response"), list) else []
+                resp_rows = body.get("response")
+                rows = resp_rows if isinstance(resp_rows, list) else []
                 app_healthscores = [
                     {
-                        "app": app_names.get(r.get("app_id"), r.get("app_id")),
+                        "app": app_names.get(r.get("app_id") or "", r.get("app_id")),
                         "healthscore_avg": r.get("application_healthscore_avg"),
                         "site": site_names.get(r.get("site_id"), r.get("site_id")),
                         "duration": r.get("duration"),
@@ -1865,7 +1869,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
 
             site_names, elem_names = _name_maps(sdk)
             elem_sites = {
-                e.get("id"): site_names.get(e.get("site_id"), e.get("site_id"))
+                e.get("id"): site_names.get(e.get("site_id") or "", e.get("site_id"))
                 for e in safe_items(sdk.get.elements())
             }
 
