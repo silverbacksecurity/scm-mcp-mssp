@@ -506,6 +506,11 @@ def _menu_mssp_ops(
                         "PAN Service Status",
                         "Upcoming maintenance + incidents per tenant region",
                     ),
+                    (
+                        "18",
+                        "Cross-Tenant Analytics",
+                        "Apps/threats/connectivity/incidents across tenants",
+                    ),
                 ]
             )
         )
