@@ -1,7 +1,7 @@
 """Tests for scm_saas_posture — SSPM posture tool with manual export/import.
 
 The SSPM extractors are monkeypatched to populate the snapshot with canned
-data (shapes match the live API as captured from bt-showcase), so no network.
+data (shapes match the live API as captured from a lab tenant), so no network.
 """
 
 from __future__ import annotations

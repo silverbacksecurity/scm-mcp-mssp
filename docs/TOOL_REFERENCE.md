@@ -3332,7 +3332,7 @@ Views:
 Data resides in a CDL region (X-PANW-Region). If `region` is not
 given, the tenant's insights_region is mapped (eu→europe etc.) and
 its eu/uk sibling is also tried, keeping the first non-empty
-answer — e.g. BT lab tenants say `eu` but hold data in `uk`.
+answer — e.g. lab tenants that say `eu` may hold data in `uk`.
 
 Args:
     tenant_id: SCM tenant ID (MSSP parent).

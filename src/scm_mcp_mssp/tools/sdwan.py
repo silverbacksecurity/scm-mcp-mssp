@@ -89,7 +89,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
         """Resolve SD-WAN client for a tenant.
 
         Accepts either the numeric TSG id (looked up in the auth cache) or a
-        settings.toml tenant key ("bt-sase-test-lab"), so callers don't need
+        settings.toml tenant key (e.g. "my-lab-tenant"), so callers don't need
         to know which form the other tools use.
         """
         tid = tenant_id or (list_loaded_tenants() or [""])[0]

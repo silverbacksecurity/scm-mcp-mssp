@@ -273,7 +273,7 @@ def make_fake_sdk(*, auditlog_status: int = 200) -> Any:
     get = SimpleNamespace(
         sites=lambda site_id=None: FakeResp(SITES),
         elements=lambda element_id=None: FakeResp(ELEMENTS),
-        wannetworks=lambda: FakeResp([{"id": "n1", "name": "BT-INET", "type": "publicwan"}]),
+        wannetworks=lambda: FakeResp([{"id": "n1", "name": "ACME-INET", "type": "publicwan"}]),
         waninterfaces=lambda site_id=None: FakeResp(
             [{"id": "swi1", "name": "Circuit-1", "network_id": "n1"}]
         ),
@@ -471,7 +471,7 @@ def test_site_map_writes_html_and_skips_unlocated(tools: dict[str, Any], tmp_pat
     assert "1 sites mapped" in result and "DC-1" in result  # skipped by name
     html = out.read_text()
     assert "Branch-1" in html and '"lat": 51.5' in html
-    assert "Circuit-1 (BT-INET)" in html
+    assert "Circuit-1 (ACME-INET)" in html
     assert "leaflet" in html
 
 

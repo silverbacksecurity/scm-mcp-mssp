@@ -12,7 +12,7 @@ do about it.
 - **Cross-tenant analytics (mt-monitor)** (2026-07-13) — `scm_mt_analytics`
   over the aggregation API: apps/threats/connectivity/incidents rolled up
   across the tenant hierarchy (`agg_by=tenant`), with CDL-region discovery
-  (insights_region mapped + eu/uk sibling fallback; BT labs store in `uk`).
+  (insights_region mapped + eu/uk sibling fallback; the lab tenants store in `uk`).
   Query language: `{"filter":{"rules":[...]},"properties":[...]}` from the
   spec examples — but `applications/list` 400s and `locationsUsers` 500s
   on the spec's own examples; revisit on a spec refresh. mt-notifications
@@ -62,9 +62,9 @@ do about it.
   snapshots: onboarded apps with severity-ranked misconfig findings,
   Identity-SSPM IdP/NHI posture, and catalog capability counts, with
   manual JSON export (`save_to`) / offline import (`load_from`) using a
-  format-tagged snapshot. Live-validated on bt-showcase (SSPM licensed,
+  format-tagged snapshot. Live-validated on a lab tenant (SSPM licensed,
   178-app catalog, zero apps onboarded — the tool renders the onboarding
-  guidance path) and bt-sase-test-lab (unlicensed → clear message). Also
+  guidance path) and a second lab tenant (unlicensed → clear message). Also
   added to the CLI Posture menu.
 - **Classic Prisma SD-WAN depth (round 2)** (2026-07-12) — three more
   read-only tools over the monitor API, live-validated on the 16-site lab:
@@ -87,7 +87,7 @@ do about it.
   WAN network); advisory drift flags compare observed ISP vs the configured
   circuit label (token overlap) and IP geolocation vs the site's configured
   coordinates (>500 km) — a live lab run flagged 8/53 circuits whose
-  generic labels hid a shared BT egress; `scm_asbuilt_report` gained
+  generic labels hid a shared carrier egress; `scm_asbuilt_report` gained
   `enrich_wan_ips` (ISP/ASN/geo/drift columns in §4.2.1 and §3.4.7); and
   `sdwan_site_map` renders an interactive Leaflet/OSM HTML map from site
   lat/long (sites without configured coordinates are listed as skipped —
@@ -152,14 +152,14 @@ do about it.
 
 ## Next
 
-_Last pan.dev check: 2026-07-09 — no new API family since the bundled catalog
-(`generated_at: 2026-07-03`). pan.dev's own changelog
-(`/sase/docs/release-notes/changelog/`) tops out at 2026-02-23 (Prisma Browser
-for MSP), and the last real content commit to `products/sase/api` was
-2026-03-06 (Config Orchestration RNHP docs) — both already shipped or listed
-below. `pan-scm-sdk` is current (`pyproject.toml` pins `>=0.15.1`, matching
-PyPI latest). The gap right now is entirely in catalog families we haven't
-built tools against yet, not in upstream drift._
+_Last pan.dev check: 2026-07-14 — one new spec file since the 2026-07-09
+catalog: **Compliance Center v1** (`scm/config/posture-management/
+compliance-framework/compliance-center-recent-v1.yaml`, 12 paths — see the
+bullet below). Catalog regenerated (`generated_at: 2026-07-14`, 3,883
+endpoints). No other upstream drift; the last content commit to
+`products/sase/api` remains 2026-03-06 (Config Orchestration RNHP docs).
+`pan-scm-sdk` is current (0.15.1 installed = PyPI latest); `prisma-sase`
+and `mcp` also current._
 
 - **SSR — Simple Service Requests (restricted customer-change CRUD)** — a
   single two-phase tool (working name `scm_ssr_execute`) automating the three
@@ -252,6 +252,19 @@ built tools against yet, not in upstream drift._
   account for live validation (current accounts get 401 on `/mt/sp-interconnect/*`).
 - **Spec-schema request validation** — validate raw-REST query/body params
   against the OpenAPI schemas before calling (fewer opaque 400s).
+- **Compliance Center API (new upstream 2026-07-14)** — `posture/
+  compliance-frameworks/v1`, 12 paths, **zero tooling**. Framework
+  definitions CRUD + clone + benchmark/un-benchmark, plus analytics:
+  per-framework compliance scores, score timeline, configurations
+  assessed, compliance controls, framework summaries, and benchmark
+  monitoring with report download. Directly adjacent to the existing
+  NCSC/NIST/ISO 27001/DSPT assessment tools — could replace or
+  cross-check the local scoring in `scm_ncsc_assess`-family tools with
+  PAN's own framework scoring, and "custom framework (CCF) + benchmark"
+  maps naturally onto the MSSP per-customer baseline idea. Usual rule:
+  probe live against a lab tenant first (new product surface — expect
+  401/403 until the right role/entitlement exists), then curate into
+  1–2 ergonomic tools rather than 12 endpoint wrappers.
 - **Newly catalogued small families — scope before building** — `dlp`
   (standalone Enterprise DLP, 29 paths, includes a Beta Incidents API),
   `dns-security` (standalone Advanced DNS Security, 2 paths), `cloudngfw/aws`
@@ -260,6 +273,142 @@ built tools against yet, not in upstream drift._
   than SCM/SASE config — confirm a managed tenant actually holds the
   entitlement before scaffolding tools, rather than building against specs
   no lab account can exercise.
+
+## Epic: Planner Agent — Agentic Orchestration Layer for scm-mcp-mssp
+
+**Goal** — build a Planner Agent layer above the existing 125-tool
+scm-mcp-mssp MCP server, following the PANW "NetSec Agents on SCM" taxonomy
+(Persona → Planner → Expert Agents → Actions → Triggers), extended with an
+MSSP cross-tenant orchestration layer that PANW's native single-tenant model
+does not cover. The Planner decomposes high-level operator intent into
+dynamic, persisted, auditable plans executed against the existing MCP tools.
+
+**Architecture principle** — build the Planner loop once; expose three
+trigger surfaces (scheduled/cron, conversational NLQ, IR/webhook) as entry
+points into the same loop. Do not build three separate agents.
+
+**Differentiation (do not cut)** — cross-tenant fan-out, tier-aware planning
+(Gold/Silver/Bronze check depth), and customer-specific reporting are the
+defensible layer versus PANW's roadmap. Single-tenant planning polish is
+secondary.
+
+Spec/design docs live in `docs/planner-agent/` (ARCHITECTURE.md,
+TOOL_MANIFEST.md).
+
+### Phase 1 — Tool taxonomy & safety rails (target: 1–2 weeks)
+
+- [ ] Create a tool manifest (`tools_manifest.yaml` or similar) covering all
+  125 MCP tools with fields:
+  - `access: read | write` — write tools: `scm_commit`,
+    `scm_security_rule_create`, `scm_security_rule_delete`,
+    `scm_address_create`, `scm_address_delete`, `dlp_restore`,
+    `scm_config_rollback`, `scm_config_push_track`, `scm_config_clone`,
+    `mssp_onboard_tenant`, `mssp_evict_tenant`, `scm_cert_import`,
+    `scm_tls_profile_manager` (create mode), `scm_apply_ncsc_baseline`,
+    `scm_attach_ncsc_profiles`, `scm_create_ncsc_snippet`,
+    `scm_create_nist_snippet`, `scm_reload`, `scm_restart`. Everything else
+    defaults to read.
+  - `domain`: one of deployment | threat_coverage | operational_health |
+    posture_compliance | config_change | licensing | sdwan | certificates |
+    identity | pab | dlp (mirrors PANW Expert Agent domains plus
+    MSSP-specific ones)
+  - `scope: tenant | cross_tenant` — cross_tenant: `mssp_tenant_dashboard`,
+    `mssp_list_tenants`, `scm_cert_lifecycle`, `scm_mt_analytics`,
+    `scm_incident_summary`, `mssp_tier_comparison`, `scm_discover_tenants`,
+    `scm_licence_forecast`, `scm_service_maintenance`, `scm_spn_bandwidth`
+    (all_tenants mode)
+  - `idempotent: true | false` and `retry_policy: retry | fallback |
+    fail_fast`
+  - `known_failure_modes`: free text (e.g. `scm_remote_network_list` —
+    Pydantic validation error on names with spaces and
+    `bgp_peer.same_as_primary` field; fallback = `scm_ike_gateway_list`
+    correlation)
+- [ ] Enforce a hard rule in the execution layer: `access: write` tools
+  ALWAYS require explicit human approval before execution, regardless of
+  trigger type. No config flag can disable this in v1.
+- [ ] Document per-domain tool groupings so the Planner loads only one
+  domain's tools (~15–20) into context per sub-plan, keeping total loaded
+  tools under the 128-tool Copilot Studio ceiling.
+
+### Phase 2 — Planner loop core (target: 2–3 weeks)
+
+- [ ] Implement the loop: Trigger → Intent parse → Plan generation →
+  Execute step → Observe result → Revise plan → repeat → Synthesis →
+  Report/notify.
+- [ ] Define a persisted Plan schema (JSON, stored per run): `plan_id`,
+  `trigger_type`, `trigger_payload`, persona/service-account identity,
+  `tenant_scope` (single ID, list, or "all"), `goal`, ordered `steps[]` each
+  with `{step_id, domain, tool, params, status:
+  pending|running|ok|failed|skipped, result_summary, retries, started_at,
+  finished_at}`, `revision_history[]`, `final_report_ref`.
+- [ ] Use Claude via the Anthropic API (tool-use) as the reasoning engine;
+  the existing scm-mcp-mssp MCP server is the tool backend over Streamable
+  transport (reuse the Copilot Studio transport work).
+- [ ] Implement sub-plan delegation: Planner selects domain → domain-scoped
+  executor runs with only that domain's tools loaded.
+- [ ] Failure policy in the loop: max 2 retries per step; on
+  validation/schema errors use the manifest's fallback tool; on server
+  timeout mark step failed and continue where the plan allows; always finish
+  with a partial report rather than aborting the run. Plans must be
+  resumable after MCP server restart (the server has known timeout/crash
+  behaviour — treat this as a first-class scenario, and allow the Planner to
+  invoke `scm_reload`/`scm_restart` as a recovery action with approval).
+- [ ] Full audit trail: every tool call, param set, and result summary
+  persisted against the `plan_id`.
+
+### Phase 3 — Trigger surfaces (priority order)
+
+- [ ] **3a. Scheduled ops agent (MVP — build first).** Cron-triggered
+  nightly run per tenant: tier assessment (`mssp_tier_assess`), cert scan
+  (`scm_cert_scan`), licence expiry (`scm_license_info` /
+  `scm_licence_forecast`), incident summary (`scm_incident_search`),
+  job/change audit (`scm_list_jobs`). Output: ranked Markdown digest per
+  tenant plus an estate-level summary, delivered via email/Slack. Findings
+  ranked by severity then customer tier (Gold first). Acceptance test: the
+  agent must autonomously surface a finding of the class "NFR licences
+  expiring within 90 days across multiple tenants" and "licensed-but-unused
+  tenant shell".
+- [ ] **3b. Conversational copilot.** Slack/Teams frontend posting NLQ
+  triggers into the same Planner loop; responses stream plan progress and
+  final synthesis.
+- [ ] **3c. IR-triggered agent (last).** Webhook from MT Monitor alerts /
+  `scm_incident_search` into the Planner with pre-built triage plan
+  templates (e.g. tunnel-down → `sdwan_wan_ip_summary`,
+  `scm_ike_gateway_list`, `scm_list_jobs` recent changes, `sdwan_events`).
+  Read-only triage in v1; remediation suggestions require approval.
+
+### Phase 4 — MSSP cross-tenant layer
+
+- [ ] Estate fan-out: a single trigger (e.g. "morning estate check")
+  generates per-tenant sub-plans across all loaded tenants
+  (`mssp_list_tenants`), executes with bounded concurrency, aggregates
+  results.
+- [ ] Tier-aware planning: read contracted tier per tenant
+  (`mssp_tenant_dashboard`) and scope check depth accordingly — Bronze:
+  licensing + cert + connectivity basics; Silver: + posture/compliance +
+  change audit; Gold: full BPA/NCSC/ISO27001 assessments + DLP/SSPM posture.
+- [ ] Cross-tenant anomaly rules: flag inconsistencies invisible to
+  per-tenant analysis (e.g. tenant with SD-WAN topology but zero licences;
+  duplicate NFR licence sets expiring across tenants; tenants with zero
+  config jobs but full licence bundles).
+
+### Constraints & risks
+
+- Read-only operation for the first month of production use, even where
+  approval gates exist. Write actions (`scm_commit` etc.) enabled only after
+  the audit trail has been reviewed.
+- PANW is building a native single-tenant Planner into SCM (NetSec Agents
+  on SCM roadmap). Re-validate scope against PANW's timeline before
+  investing beyond Phase 2 polish; keep investment weighted toward Phase 4
+  (MSSP layer) and customer-specific reporting.
+- MCP server stability is a known risk (timeouts, crashes, full disconnects
+  observed); plan persistence + resumability is a hard requirement, not a
+  nice-to-have.
+
+### Estimate
+
+- Credible scheduled-ops MVP (Phases 1, 2, 3a): ~4–6 weeks part-time given
+  the Expert/tool layer already exists.
 
 ## How additions happen
 

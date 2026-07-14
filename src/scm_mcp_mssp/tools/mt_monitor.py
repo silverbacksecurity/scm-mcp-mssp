@@ -11,7 +11,7 @@ Quirks learned live:
 - Data lives in a CDL region selected by the `X-PANW-Region` header
   (de/americas/europe/uk/sg/ca/jp/au/in, default americas). A tenant whose
   `insights_region` says `eu` may still store data in `uk` (true for the
-  BT labs), so when no region is given we try the mapped region and its
+  lab tenants), so when no region is given we try the mapped region and its
   eu/uk sibling and keep the first non-empty answer.
 - Requests use the aggregation query language from the spec examples:
   `{"filter": {"rules": [...]}, "properties": [...]}`; wrong/missing
@@ -165,7 +165,7 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
         Data resides in a CDL region (X-PANW-Region). If `region` is not
         given, the tenant's insights_region is mapped (eu→europe etc.) and
         its eu/uk sibling is also tried, keeping the first non-empty
-        answer — e.g. BT lab tenants say `eu` but hold data in `uk`.
+        answer — e.g. lab tenants that say `eu` may hold data in `uk`.
 
         Args:
             tenant_id: SCM tenant ID (MSSP parent).

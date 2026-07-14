@@ -31,10 +31,9 @@ reports/
 *asbuilt*.docx
 *bpa-*.md
 *ncsc-*.md
-bt-*.md
-BT-*.md
-BT-*.docx
 tenant-*.md
+# Customer-name-prefixed report globs live in .git/info/exclude (local only)
+# so customer identifiers never appear in this published file.
 
 # Dev artefacts
 ai-design-components/

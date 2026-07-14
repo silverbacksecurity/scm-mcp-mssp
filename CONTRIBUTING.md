@@ -85,7 +85,7 @@ All four must pass — the CI gate blocks merges if they don't.
 
 ## Security & secrets
 
-- **Never** commit `.secrets.toml`, `.env`, report files (`*.md` matching `bt-*`, `tenant-*`), or backup JSON.
+- **Never** commit `.secrets.toml`, `.env`, report files (`*.md`/`*.docx` named after a tenant or customer, e.g. `tenant-*`), or backup JSON.
 - The `.gitignore` blocks most of these; if you hit a false negative, fix `.gitignore` in the same PR.
 - Rotate any credential that is accidentally committed immediately.
 

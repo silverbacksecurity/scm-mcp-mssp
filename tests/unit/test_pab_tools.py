@@ -19,7 +19,7 @@ USERS_P1 = {
     "pageInfo": {"hasNextPage": True, "cursor": "CUR2"},
     "data": [
         {
-            "email": "a@bt.com",
+            "email": "a@example.com",
             "name": "A",
             "status": "active",
             "provider": "scm",
@@ -33,7 +33,7 @@ USERS_P1 = {
 USERS_P2 = {
     "pageInfo": {"hasNextPage": False, "cursor": ""},
     "data": [
-        {"email": "b@bt.com", "name": "B", "status": "suspended", "deviceIds": []},
+        {"email": "b@example.com", "name": "B", "status": "suspended", "deviceIds": []},
     ],
 }
 DEVICES = {
@@ -139,7 +139,7 @@ def test_users_pagination_follows_cursor(tools: Any) -> None:
     t = tools({"users": users}, calls)
     data = json.loads(t["scm_pab_inventory"](view="users", limit=10))
     assert data["total"] == 2
-    assert [u["email"] for u in data["users"]] == ["a@bt.com", "b@bt.com"]
+    assert [u["email"] for u in data["users"]] == ["a@example.com", "b@example.com"]
     assert data["users"][0]["device_count"] == 2
     assert calls[1]["params"]["cursor"] == "CUR2"
 
