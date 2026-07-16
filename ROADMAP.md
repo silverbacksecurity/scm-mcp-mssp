@@ -398,7 +398,10 @@ in .secrets.toml (same credential as scm_ai_compliance_advisor).
 
 ### Phase 3 — Trigger surfaces (priority order)
 
-- [ ] **3a. Scheduled ops agent (MVP — build first).** Cron-triggered
+- [x] **3a. Scheduled ops agent (MVP — build first).** ✅ shipped 2026-07-15
+  (`scm-planner-nightly`; acceptance findings fired on live estate data —
+  see CHANGELOG). Email delivery still TODO (Slack webhook + file done).
+  Original spec: Cron-triggered
   nightly run per tenant: tier assessment (`mssp_tier_assess`), cert scan
   (`scm_cert_scan`), licence expiry (`scm_license_info` /
   `scm_licence_forecast`), incident summary (`scm_incident_search`),
