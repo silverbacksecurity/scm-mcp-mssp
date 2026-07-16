@@ -14,7 +14,7 @@ from typing import Any
 from rich import box
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from .config.settings import TenantConfig
@@ -58,154 +58,140 @@ def _menu_config_inventory(
     _save_json,
     _pause,
 ) -> None:
-    """Browse SCM objects, network, security policy, connectivity, and deployment."""
+    """Browse SCM objects, network, security policy, connectivity, and deployment.
 
-    def _draw() -> None:
+    Paginated into 5 section pages to avoid a 21-item wall.
+    """
+    _PAGES = [
+        (
+            "OBJECTS",
+            [
+                ("1", "Addresses", "List address objects"),
+                ("2", "Address Groups", "List address groups"),
+                ("3", "Services", "List service objects"),
+                ("4", "Tags", "List tags"),
+                ("5", "External Dynamic Lists", "List EDLs"),
+            ],
+        ),
+        (
+            "NETWORK",
+            [
+                ("6", "Zones", "List security zones"),
+                ("7", "NAT Rules", "List NAT policy rules"),
+                ("8", "IKE Gateways", "List IKE gateways"),
+                ("9", "IPSec Tunnels", "List IPSec tunnels"),
+                ("10", "DNS Servers", "List internal DNS servers"),
+            ],
+        ),
+        (
+            "SECURITY",
+            [
+                ("11", "Security Rules", "List security policy rules"),
+                ("12", "Anti-Spyware Profiles", "List anti-spyware profiles"),
+                ("13", "URL Categories", "List URL filtering categories"),
+            ],
+        ),
+        (
+            "CONNECTIVITY",
+            [
+                ("14", "Remote Networks", "List RN branch connections"),
+                ("15", "Service Connections", "List SC data-centre connections"),
+                ("16", "Bandwidth Allocations", "List compute location bandwidth"),
+            ],
+        ),
+        (
+            "DEPLOYMENT",
+            [
+                ("17", "Folders", "List SCM folder hierarchy"),
+                ("18", "Devices", "List managed firewalls / Panorama"),
+                ("19", "Snippets", "List configuration snippets"),
+                ("20", "Config Versions", "List configuration versions"),
+                ("21", "Jobs", "List SCM config jobs / commits"),
+            ],
+        ),
+    ]
+
+    def _draw_section_page(page: int) -> None:
         _print_banner(tenant)
-        console.rule("[cyan]Config & Inventory[/cyan]")
-        _section("OBJECTS")
-        console.print(
-            _menu_table(
-                [
-                    ("1", "Addresses", "List address objects"),
-                    ("2", "Address Groups", "List address groups"),
-                    ("3", "Services", "List service objects"),
-                    ("4", "Tags", "List tags"),
-                    ("5", "External Dynamic Lists", "List EDLs"),
-                ]
-            )
-        )
+        console.rule(f"[cyan]Config & Inventory[/cyan]  [dim]page {page+1}/{len(_PAGES)}[/dim]")
+        section_name, items = _PAGES[page]
+        _section(section_name)
+        console.print(_menu_table(items))
         console.print()
-        _section("NETWORK")
-        console.print(
-            _menu_table(
-                [
-                    ("6", "Zones", "List security zones"),
-                    ("7", "NAT Rules", "List NAT policy rules"),
-                    ("8", "IKE Gateways", "List IKE gateways"),
-                    ("9", "IPSec Tunnels", "List IPSec tunnels"),
-                    ("10", "DNS Servers", "List internal DNS servers"),
-                ]
-            )
-        )
-        console.print()
-        _section("SECURITY")
-        console.print(
-            _menu_table(
-                [
-                    ("11", "Security Rules", "List security policy rules"),
-                    ("12", "Anti-Spyware Profiles", "List anti-spyware profiles"),
-                    ("13", "URL Categories", "List URL filtering categories"),
-                ]
-            )
-        )
-        console.print()
-        _section("CONNECTIVITY")
-        console.print(
-            _menu_table(
-                [
-                    ("14", "Remote Networks", "List RN branch connections"),
-                    ("15", "Service Connections", "List SC data-centre connections"),
-                    ("16", "Bandwidth Allocations", "List compute location bandwidth"),
-                ]
-            )
-        )
-        console.print()
-        _section("DEPLOYMENT")
-        console.print(
-            _menu_table(
-                [
-                    ("17", "Folders", "List SCM folder hierarchy"),
-                    ("18", "Devices", "List managed firewalls / Panorama"),
-                    ("19", "Snippets", "List configuration snippets"),
-                    ("20", "Config Versions", "List configuration versions"),
-                    ("21", "Jobs", "List SCM config jobs / commits"),
-                ]
-            )
-        )
-        console.print()
-        console.print(_menu_table([("0", "Back", "")]))
+        nav = [("0", "Back to Main Menu", "")]
+        if page > 0:
+            nav.insert(0, ("P", "← Previous Section", _PAGES[page - 1][0]))
+        if page < len(_PAGES) - 1:
+            nav.insert(0, ("N", f"Next Section → {_PAGES[page + 1][0]}", ""))
+        console.print(_menu_table(nav))
         console.print()
 
+    # Build dispatch: choice -> (leaf_fn_args, ...)
+    _DISPATCH: dict[str, list[Any]] = {
+        "1": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "2": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "3": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "4": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "5": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "6": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "7": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "8": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "9": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "10": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "11": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "12": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "13": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "14": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "15": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "16": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "17": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "18": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "19": [tenant, console, _get_cli_client, _list_and_display, _save_json, _pause],
+        "20": [tenant, console, _get_cli_client, _save_json, _pause],
+        "21": [tenant, console, _get_cli_client, _save_json, _pause],
+    }
+
+    _LEAF: dict[str, Any] = {
+        "1": _op_list_addresses,
+        "2": _op_list_address_groups,
+        "3": _op_list_services,
+        "4": _op_list_tags,
+        "5": _op_list_edls,
+        "6": _op_list_zones,
+        "7": _op_list_nat_rules,
+        "8": _op_list_ike_gateways,
+        "9": _op_list_ipsec_tunnels,
+        "10": _op_list_dns_servers,
+        "11": _op_list_security_rules,
+        "12": _op_list_anti_spyware_profiles,
+        "13": _op_list_url_categories,
+        "14": _op_list_remote_networks,
+        "15": _op_list_service_connections,
+        "16": _op_list_bandwidth_allocations,
+        "17": _op_list_folders,
+        "18": _op_list_devices,
+        "19": _op_list_snippets,
+        "20": _op_list_config_versions,
+        "21": _op_list_jobs,
+    }
+
+    page = 0
     while True:
-        _draw()
-        choice = Prompt.ask("[bold cyan]>[/bold cyan]", default="").strip()
+        _draw_section_page(page)
+        choice = Prompt.ask("[bold cyan]>[/bold cyan]", default="").strip().upper()
+
         if choice == "0":
             return
-        elif choice == "1":
-            _op_list_addresses(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "2":
-            _op_list_address_groups(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "3":
-            _op_list_services(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "4":
-            _op_list_tags(tenant, console, _get_cli_client, _list_and_display, _save_json, _pause)
-        elif choice == "5":
-            _op_list_edls(tenant, console, _get_cli_client, _list_and_display, _save_json, _pause)
-        elif choice == "6":
-            _op_list_zones(tenant, console, _get_cli_client, _list_and_display, _save_json, _pause)
-        elif choice == "7":
-            _op_list_nat_rules(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "8":
-            _op_list_ike_gateways(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "9":
-            _op_list_ipsec_tunnels(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "10":
-            _op_list_dns_servers(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "11":
-            _op_list_security_rules(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "12":
-            _op_list_anti_spyware_profiles(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "13":
-            _op_list_url_categories(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "14":
-            _op_list_remote_networks(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "15":
-            _op_list_service_connections(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "16":
-            _op_list_bandwidth_allocations(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "17":
-            _op_list_folders(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "18":
-            _op_list_devices(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "19":
-            _op_list_snippets(
-                tenant, console, _get_cli_client, _list_and_display, _save_json, _pause
-            )
-        elif choice == "20":
-            _op_list_config_versions(tenant, console, _get_cli_client, _save_json, _pause)
-        elif choice == "21":
-            _op_list_jobs(tenant, console, _get_cli_client, _save_json, _pause)
+        if choice == "N" and page < len(_PAGES) - 1:
+            page += 1
+            continue
+        if choice == "P" and page > 0:
+            page -= 1
+            continue
+
+        leaf = _LEAF.get(choice)
+        if leaf is not None:
+            leaf(*_DISPATCH[choice])
 
 
 # ── sub-menu: Audit & Compliance ──────────────────────────────────────────
@@ -307,65 +293,79 @@ def _menu_audit_compliance(
 def _menu_sdwan(
     tenant: TenantConfig, console, _print_banner, _menu_table, _section, _op_sdwan_topology, _pause
 ) -> None:
-    """Prisma SD-WAN inventory, topology, and diagnostics."""
+    """Prisma SD-WAN inventory, topology, and diagnostics.
 
-    def _draw() -> None:
+    Paginated into 3 section pages to avoid a 21-item wall.
+    """
+    _PAGES = [
+        (
+            "INVENTORY",
+            [
+                ("1", "Sites", "List SD-WAN sites (branches, DCs, hubs)"),
+                ("2", "Elements", "List ION elements (physical/virtual appliances)"),
+                ("3", "WAN Interfaces", "List WAN interfaces for a site"),
+                ("4", "WAN Networks", "List ISP circuit definitions"),
+                ("5", "Path Groups", "List circuit groupings for policy"),
+                ("6", "Policies", "List SD-WAN policy sets"),
+                ("7", "Clusters", "List hub-and-spoke clusters (HA topology)"),
+                ("8", "BGP", "List BGP configs and peer status"),
+            ],
+        ),
+        (
+            "TOPOLOGY",
+            [
+                ("9", "Topology Diagram", "Mermaid VPN overlay diagram"),
+                ("10", "Topology Summary", "Full topology summary"),
+                ("11", "Debug Topology", "Raw JSON from topology API"),
+                ("12", "Full Topology Report", "Interactive sub-menu (sites + diagram)"),
+                ("13", "Site Map (HTML)", "Interactive Leaflet/OSM map from site geo data"),
+            ],
+        ),
+        (
+            "MONITORING",
+            [
+                ("14", "Events", "Alarm/alert feed with severity summary"),
+                ("15", "Software Status", "Per-ION versions + staged upgrade state"),
+                ("16", "Link Health", "Per-path LQM latency/jitter/MOS for a site"),
+                ("17", "Flows / Top Talkers", "Top sources, destinations, apps for a site"),
+                ("18", "App Health", "Healthscore buckets + top-N apps and sites"),
+                ("19", "Cellular Modules", "LTE/5G modem, SIM, and signal status"),
+                ("20", "WAN IP Summary", "Public/private WAN IPs (optional ISP enrichment)"),
+                ("21", "Audit Logs", "Operator/API audit trail (needs write role)"),
+            ],
+        ),
+    ]
+
+    def _draw_section_page(page: int) -> None:
         _print_banner(tenant)
-        console.rule("[cyan]Prisma SD-WAN[/cyan]")
-        _section("INVENTORY")
-        console.print(
-            _menu_table(
-                [
-                    ("1", "Sites", "List SD-WAN sites (branches, DCs, hubs)"),
-                    ("2", "Elements", "List ION elements (physical/virtual appliances)"),
-                    ("3", "WAN Interfaces", "List WAN interfaces for a site"),
-                    ("4", "WAN Networks", "List ISP circuit definitions"),
-                    ("5", "Path Groups", "List circuit groupings for policy"),
-                    ("6", "Policies", "List SD-WAN policy sets"),
-                    ("7", "Clusters", "List hub-and-spoke clusters (HA topology)"),
-                    ("8", "BGP", "List BGP configs and peer status"),
-                ]
-            )
-        )
+        console.rule(f"[cyan]Prisma SD-WAN[/cyan]  [dim]page {page+1}/{len(_PAGES)}[/dim]")
+        section_name, items = _PAGES[page]
+        _section(section_name)
+        console.print(_menu_table(items))
         console.print()
-        _section("TOPOLOGY")
-        console.print(
-            _menu_table(
-                [
-                    ("9", "Topology Diagram", "Mermaid VPN overlay diagram"),
-                    ("10", "Topology Summary", "Full topology summary"),
-                    ("11", "Debug Topology", "Raw JSON from topology API"),
-                    ("12", "Full Topology Report", "Interactive sub-menu (sites + diagram)"),
-                    ("13", "Site Map (HTML)", "Interactive Leaflet/OSM map from site geo data"),
-                ]
-            )
-        )
-        console.print()
-        _section("MONITORING")
-        console.print(
-            _menu_table(
-                [
-                    ("14", "Events", "Alarm/alert feed with severity summary"),
-                    ("15", "Software Status", "Per-ION versions + staged upgrade state"),
-                    ("16", "Link Health", "Per-path LQM latency/jitter/MOS for a site"),
-                    ("17", "Flows / Top Talkers", "Top sources, destinations, apps for a site"),
-                    ("18", "App Health", "Healthscore buckets + top-N apps and sites"),
-                    ("19", "Cellular Modules", "LTE/5G modem, SIM, and signal status"),
-                    ("20", "WAN IP Summary", "Public/private WAN IPs (optional ISP enrichment)"),
-                    ("21", "Audit Logs", "Operator/API audit trail (needs write role)"),
-                ]
-            )
-        )
-        console.print()
-        console.print(_menu_table([("0", "Back", "")]))
+        nav = [("0", "Back to Main Menu", "")]
+        if page > 0:
+            nav.insert(0, ("P", "← Previous Section", _PAGES[page - 1][0]))
+        if page < len(_PAGES) - 1:
+            nav.insert(0, ("N", f"Next Section → {_PAGES[page + 1][0]}", ""))
+        console.print(_menu_table(nav))
         console.print()
 
+    page = 0
     while True:
-        _draw()
-        choice = Prompt.ask("[bold cyan]>[/bold cyan]", default="").strip()
+        _draw_section_page(page)
+        choice = Prompt.ask("[bold cyan]>[/bold cyan]", default="").strip().upper()
+
         if choice == "0":
             return
-        elif choice == "1":
+        if choice == "N" and page < len(_PAGES) - 1:
+            page += 1
+            continue
+        if choice == "P" and page > 0:
+            page -= 1
+            continue
+
+        if choice == "1":
             _op_sdwan_list_sites(tenant, console, _pause)
         elif choice == "2":
             _op_sdwan_list_elements(tenant, console, _pause)
@@ -501,16 +501,6 @@ def _menu_mssp_ops(
                 [
                     ("1", "Tenant Dashboard", "Multi-tenant NOC traffic-light health view"),
                     ("2", "NOC Health Dashboard", "Cross-tenant health wallboard"),
-                    (
-                        "17",
-                        "PAN Service Status",
-                        "Upcoming maintenance + incidents per tenant region",
-                    ),
-                    (
-                        "18",
-                        "Cross-Tenant Analytics",
-                        "Apps/threats/connectivity/incidents across tenants",
-                    ),
                 ]
             )
         )
@@ -557,6 +547,24 @@ def _menu_mssp_ops(
                     ("14", "Upgrade Path", "What's needed to upgrade tiers"),
                     ("15", "Snippet Catalogue", "List MSSP tier snippet templates"),
                     ("16", "Discover Tenants", "Discover managed sub-tenants"),
+                ]
+            )
+        )
+        console.print()
+        _section("SYSTEM")
+        console.print(
+            _menu_table(
+                [
+                    (
+                        "17",
+                        "PAN Service Status",
+                        "Upcoming maintenance + incidents per tenant region",
+                    ),
+                    (
+                        "18",
+                        "Cross-Tenant Analytics",
+                        "Apps/threats/connectivity/incidents across tenants",
+                    ),
                 ]
             )
         )
@@ -624,9 +632,14 @@ def _menu_posture_noc(
                 [
                     ("1", "Posture Report", "SCM Posture Management best-practice findings"),
                     (
-                        "5",
+                        "2",
                         "SaaS Posture (SSPM)",
                         "App misconfigs, IdP posture — export/import JSON",
+                    ),
+                    (
+                        "3",
+                        "Compliance Center",
+                        "Framework scores, controls, benchmark monitoring",
                     ),
                 ]
             )
@@ -636,8 +649,8 @@ def _menu_posture_noc(
         console.print(
             _menu_table(
                 [
-                    ("2", "Incident Search", "Search SCM security incidents"),
-                    ("3", "Incident Summary", "Cross-tenant incident NOC dashboard"),
+                    ("4", "Incident Search", "Search SCM security incidents"),
+                    ("5", "Incident Summary", "Cross-tenant incident NOC dashboard"),
                 ]
             )
         )
@@ -646,7 +659,7 @@ def _menu_posture_noc(
         console.print(
             _menu_table(
                 [
-                    ("4", "TLS Profile Manager", "List / create TLS service profiles"),
+                    ("6", "TLS Profile Manager", "List / create TLS service profiles"),
                 ]
             )
         )
@@ -662,13 +675,15 @@ def _menu_posture_noc(
         elif choice == "1":
             _op_posture_report(tenant, console, _pause)
         elif choice == "2":
-            _op_incidents(tenant)
-        elif choice == "3":
-            _op_incident_summary(tenant, console, _pause)
-        elif choice == "4":
-            _op_tls_profile_manager(tenant, console, _pause)
-        elif choice == "5":
             _op_saas_posture(tenant, console, _pause)
+        elif choice == "3":
+            _op_compliance_center(tenant, console, _pause)
+        elif choice == "4":
+            _op_incidents(tenant)
+        elif choice == "5":
+            _op_incident_summary(tenant, console, _pause)
+        elif choice == "6":
+            _op_tls_profile_manager(tenant, console, _pause)
 
 
 # ── sub-menu: NCSC / NIST Remediation ─────────────────────────────────────
@@ -859,7 +874,7 @@ def _op_list_addresses(
         out = _save_json(results, "addresses", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_address_groups(
@@ -876,7 +891,7 @@ def _op_list_address_groups(
         out = _save_json(results, "address_groups", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_services(
@@ -893,7 +908,7 @@ def _op_list_services(
         out = _save_json(results, "services", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_tags(tenant, console, _get_cli_client, _list_and_display, _save_json, _pause) -> None:
@@ -906,7 +921,7 @@ def _op_list_tags(tenant, console, _get_cli_client, _list_and_display, _save_jso
         out = _save_json(results, "tags", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_edls(tenant, console, _get_cli_client, _list_and_display, _save_json, _pause) -> None:
@@ -925,7 +940,7 @@ def _op_list_edls(tenant, console, _get_cli_client, _list_and_display, _save_jso
         out = _save_json(results, "edls", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_zones(tenant, console, _get_cli_client, _list_and_display, _save_json, _pause) -> None:
@@ -940,7 +955,7 @@ def _op_list_zones(tenant, console, _get_cli_client, _list_and_display, _save_js
         out = _save_json(results, "zones", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_nat_rules(
@@ -964,7 +979,7 @@ def _op_list_nat_rules(
         out = _save_json(results, "nat_rules", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_ike_gateways(
@@ -985,7 +1000,7 @@ def _op_list_ike_gateways(
         out = _save_json(results, "ike_gateways", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_ipsec_tunnels(
@@ -1006,7 +1021,7 @@ def _op_list_ipsec_tunnels(
         out = _save_json(results, "ipsec_tunnels", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_dns_servers(
@@ -1023,7 +1038,7 @@ def _op_list_dns_servers(
         out = _save_json(results, "dns_servers", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_security_rules(
@@ -1047,7 +1062,7 @@ def _op_list_security_rules(
         out = _save_json(results, "security_rules", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_anti_spyware_profiles(
@@ -1064,7 +1079,7 @@ def _op_list_anti_spyware_profiles(
         out = _save_json(results, "anti_spyware_profiles", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_url_categories(
@@ -1081,7 +1096,7 @@ def _op_list_url_categories(
         out = _save_json(results, "url_categories", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_remote_networks(
@@ -1100,7 +1115,7 @@ def _op_list_remote_networks(
         out = _save_json(results, "remote_networks", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_service_connections(
@@ -1121,7 +1136,7 @@ def _op_list_service_connections(
         out = _save_json(results, "service_connections", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_bandwidth_allocations(
@@ -1142,7 +1157,7 @@ def _op_list_bandwidth_allocations(
         out = _save_json(results, "bandwidth_allocations", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_folders(
@@ -1156,7 +1171,7 @@ def _op_list_folders(
         out = _save_json(results, "folders", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_devices(
@@ -1177,7 +1192,7 @@ def _op_list_devices(
         out = _save_json(results, "devices", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_snippets(
@@ -1193,7 +1208,7 @@ def _op_list_snippets(
         out = _save_json(results, "snippets", tenant.tenant_id)
         if out:
             console.print(f"[dim]Saved: {out}[/dim]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_config_versions(tenant, console, _get_cli_client, _save_json, _pause) -> None:
@@ -1240,7 +1255,7 @@ def _op_list_config_versions(tenant, console, _get_cli_client, _save_json, _paus
                     console.print(f"[dim]Saved: {out}[/dim]")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_list_jobs(tenant, console, _get_cli_client, _save_json, _pause) -> None:
@@ -1271,7 +1286,7 @@ def _op_list_jobs(tenant, console, _get_cli_client, _save_json, _pause) -> None:
                     console.print(f"[dim]Saved: {out}[/dim]")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: SD-WAN ────────────────────────────────────────────────
@@ -1296,7 +1311,7 @@ def _op_sdwan_list_sites(tenant, console, _pause) -> None:
         console.print(f"[dim]{len(sites)} site(s)[/dim]")
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_elements(tenant, console, _pause) -> None:
@@ -1321,7 +1336,7 @@ def _op_sdwan_list_elements(tenant, console, _pause) -> None:
         console.print(t)
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_wan_ifaces(tenant, console, _pause) -> None:
@@ -1352,7 +1367,7 @@ def _op_sdwan_list_wan_ifaces(tenant, console, _pause) -> None:
         console.print(f"[dim]{len(ifaces)} interface(s)[/dim]")
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_wan_networks(tenant, console, _pause) -> None:
@@ -1373,7 +1388,7 @@ def _op_sdwan_list_wan_networks(tenant, console, _pause) -> None:
         console.print(t)
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_path_groups(tenant, console, _pause) -> None:
@@ -1391,7 +1406,7 @@ def _op_sdwan_list_path_groups(tenant, console, _pause) -> None:
         console.print(t)
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_policies(tenant, console, _pause) -> None:
@@ -1418,7 +1433,7 @@ def _op_sdwan_list_policies(tenant, console, _pause) -> None:
         console.print(f"[dim]{len(policies)} policy set(s)[/dim]")
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_clusters(tenant, console, _pause) -> None:
@@ -1447,7 +1462,7 @@ def _op_sdwan_list_clusters(tenant, console, _pause) -> None:
         console.print(f"[dim]{len(clusters)} cluster(s)[/dim]")
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_list_bgp(tenant, console, _pause) -> None:
@@ -1482,7 +1497,7 @@ def _op_sdwan_list_bgp(tenant, console, _pause) -> None:
         console.print(f"[dim]{len(bgps)} BGP config(s)[/dim]")
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_topology_diagram(tenant, console, _pause) -> None:
@@ -1511,7 +1526,7 @@ def _op_sdwan_topology_diagram(tenant, console, _pause) -> None:
         console.print(f"\n[dim]Saved: {out}[/dim]")
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_topology_summary(tenant, console, _pause) -> None:
@@ -1540,7 +1555,7 @@ def _op_sdwan_topology_summary(tenant, console, _pause) -> None:
         console.print(Panel(json.dumps(payload, indent=2), title="Topology Summary"))
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_debug_topology(tenant, console, _pause) -> None:
@@ -1568,7 +1583,7 @@ def _op_sdwan_debug_topology(tenant, console, _pause) -> None:
         console.print(json.dumps(data, indent=2)[:5000])
     except Exception as exc:
         console.print(f"[red]SD-WAN error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_monitor(
@@ -1582,7 +1597,7 @@ def _op_sdwan_monitor(
         site_id = Prompt.ask("Site ID (see Sites listing)", default="").strip()
         if not site_id:
             console.print("[yellow]Site ID is required for this view.[/yellow]")
-            _pause()
+            # (auto-continue — read-only operation)
             return
         kwargs["site_id"] = site_id
     with console.status(f"[cyan]{status}...[/cyan]"):
@@ -1594,7 +1609,7 @@ def _op_sdwan_monitor(
         console.print_json(result)
     else:
         console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_wan_ip_summary(tenant, console, _pause) -> None:
@@ -1616,7 +1631,7 @@ def _op_sdwan_wan_ip_summary(tenant, console, _pause) -> None:
         console.print_json(result)
     else:
         console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_sdwan_site_map(tenant, console, _pause) -> None:
@@ -1636,7 +1651,7 @@ def _op_sdwan_site_map(tenant, console, _pause) -> None:
         except Exception as exc:
             result = f"Error: {exc}"
     console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: SSE, DLP & CASB ───────────────────────────────────────
@@ -1670,7 +1685,7 @@ def _op_dlp_list(tenant, console, _pause) -> None:
                 console.print(t)
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_dlp_enterprise_list(tenant, console, _pause) -> None:
@@ -1697,7 +1712,7 @@ def _op_dlp_enterprise_list(tenant, console, _pause) -> None:
                 )
         except Exception as exc:
             console.print(f"[yellow]Enterprise DLP not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_dlp_backup(tenant, console, _pause) -> None:
@@ -1776,7 +1791,7 @@ def _op_casb_list(tenant, console, _pause) -> None:
                 console.print("[yellow]No CASB restrictions found (or not licensed).[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]CASB not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_ztna_list(tenant, console, _pause) -> None:
@@ -1800,7 +1815,7 @@ def _op_ztna_list(tenant, console, _pause) -> None:
                 console.print("[yellow]ZTNA Connector not enabled for this tenant.[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]ZTNA connectors not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_pab_inventory(tenant, console, _pause) -> None:
@@ -1826,7 +1841,7 @@ def _op_pab_inventory(tenant, console, _pause) -> None:
         console.print_json(result)
     else:
         console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_pab_user_requests(tenant, console, _pause) -> None:
@@ -1846,7 +1861,7 @@ def _op_pab_user_requests(tenant, console, _pause) -> None:
         console.print_json(result)
     else:
         console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_browser_list(tenant, console, _pause) -> None:
@@ -1874,7 +1889,7 @@ def _op_browser_list(tenant, console, _pause) -> None:
                 console.print("[yellow]Prisma Browser not licensed for this tenant.[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]Prisma Browser not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_airs_list(tenant, console, _pause) -> None:
@@ -1918,7 +1933,7 @@ def _op_airs_list(tenant, console, _pause) -> None:
                 )
         except Exception as exc:
             console.print(f"[yellow]AIRS not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: MSSP Operations ───────────────────────────────────────
@@ -1946,7 +1961,7 @@ def _op_mt_analytics(tenant, console, _pause) -> None:
         console.print_json(result)
     else:
         console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_service_maintenance(tenant, console, _pause) -> None:
@@ -1966,7 +1981,7 @@ def _op_service_maintenance(tenant, console, _pause) -> None:
         console.print_json(result)
     else:
         console.print(f"[red]{result}[/red]" if result.startswith("Error") else result)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_mssp_tenant_dashboard(tenant, console, _pause) -> None:
@@ -1978,7 +1993,7 @@ def _op_mssp_tenant_dashboard(tenant, console, _pause) -> None:
             console.print(Markdown(result))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_noc_dashboard(tenant, console, _pause) -> None:
@@ -1992,7 +2007,7 @@ def _op_noc_dashboard(tenant, console, _pause) -> None:
             console.print(Markdown(result))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_license_info(tenant, console, _pause) -> None:
@@ -2023,7 +2038,7 @@ def _op_license_info(tenant, console, _pause) -> None:
                 console.print("[yellow]No licences found.[/yellow]")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_license_forecast(tenant, console, _pause) -> None:
@@ -2035,7 +2050,7 @@ def _op_license_forecast(tenant, console, _pause) -> None:
             console.print(Markdown(result))
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_mobile_user_stats(tenant, console, _pause) -> None:
@@ -2057,7 +2072,7 @@ def _op_mobile_user_stats(tenant, console, _pause) -> None:
                 console.print("[yellow]No HTTP session available[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]Mobile user stats not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_gp_session_summary(tenant, console, _pause) -> None:
@@ -2079,7 +2094,7 @@ def _op_gp_session_summary(tenant, console, _pause) -> None:
                 console.print("[yellow]No HTTP session available[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]GP session summary not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_user_count(tenant, console, _pause) -> None:
@@ -2093,7 +2108,7 @@ def _op_user_count(tenant, console, _pause) -> None:
             session = getattr(client, "session", None)
             if not session:
                 console.print("[red]No HTTP session available.[/red]")
-                _pause()
+                # (auto-continue — read-only operation)
                 return
 
             # GP mobile users
@@ -2164,7 +2179,7 @@ def _op_user_count(tenant, console, _pause) -> None:
 
         except Exception as exc:
             console.print(f"[yellow]User count unavailable: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_spn_bandwidth(tenant, console, _pause) -> None:
@@ -2194,7 +2209,7 @@ def _op_spn_bandwidth(tenant, console, _pause) -> None:
                 console.print("[yellow]No bandwidth allocations found.[/yellow]")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_cert_lifecycle(tenant, console, _pause) -> None:
@@ -2242,7 +2257,7 @@ def _op_cert_lifecycle(tenant, console, _pause) -> None:
                 console.print("[yellow]No certificates found.[/yellow]")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_cert_scan(tenant, console, _pause) -> None:
@@ -2275,7 +2290,7 @@ def _op_tier_assess(tenant, console, _pause) -> None:
             )
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_tier_report(tenant, console, _pause) -> None:
@@ -2296,7 +2311,7 @@ def _op_tier_comparison(tenant, console, _pause) -> None:
     ]:
         t.add_row(*row)
     console.print(t)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_upgrade_path(tenant, console, _pause) -> None:
@@ -2332,7 +2347,7 @@ def _op_upgrade_path(tenant, console, _pause) -> None:
                 console.print(f"  [yellow]→[/yellow] {s}")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_snippet_catalogue(tenant, console, _pause) -> None:
@@ -2347,7 +2362,7 @@ def _op_snippet_catalogue(tenant, console, _pause) -> None:
             ", ".join(tier_def.scm_snippets) or "—",
         )
         console.print(t)
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_discover_tenants(tenant, console, _pause) -> None:
@@ -2379,7 +2394,7 @@ def _op_discover_tenants(tenant, console, _pause) -> None:
                 console.print("[yellow]No HTTP session available[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]Tenant discovery not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: Posture & Incidents ───────────────────────────────────
@@ -2411,7 +2426,69 @@ def _op_saas_posture(tenant, console, _pause) -> None:
         console.print(f"[red]{result}[/red]")
     else:
         console.print(Markdown(result))
-    _pause()
+    # (auto-continue — read-only operation)
+
+
+def _op_compliance_center(tenant, console, _pause) -> None:
+    from .tools.compliance import register_compliance_tools
+
+    console.print()
+    console.print("[bold]Compliance Center — Select Action:[/bold]")
+    console.print()
+    actions_table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    actions_table.add_column(style="cyan", width=4)
+    actions_table.add_column(width=24)
+    actions_table.add_column(style="dim")
+    for num, title, desc in [
+        ("1", "List Frameworks", "Browse framework definitions"),
+        ("2", "Summaries", "Scores, revision state, benchmark status"),
+        ("3", "Scores", "Overall/industry scores by product + category"),
+        ("4", "Controls", "Per-control pass/fail detail with severity"),
+        ("5", "Timeline", "30-day / 1-year score trend"),
+        ("6", "Assessed Configs", "Check, assessment & exception counts"),
+        ("7", "Benchmark Monitoring", "Live BPC monitoring data"),
+        ("8", "Framework Detail", "Full framework JSON"),
+    ]:
+        actions_table.add_row(num, title, desc)
+    console.print(actions_table)
+    action_choice = Prompt.ask("Action", default="1").strip()
+    action_map = {
+        "1": "list-frameworks",
+        "2": "summaries",
+        "3": "scores",
+        "4": "controls",
+        "5": "timeline",
+        "6": "assessed",
+        "7": "benchmark-monitoring",
+        "8": "framework-detail",
+    }
+    action = action_map.get(action_choice, "list-frameworks")
+    kwargs: dict[str, Any] = {"action": action, "tenant_id": tenant.tenant_id}
+
+    if action in ("scores", "controls", "timeline", "assessed", "framework-detail"):
+        fw_id = Prompt.ask("Framework ID", default="").strip()
+        if fw_id:
+            kwargs["framework_id"] = fw_id
+    if action in ("summaries", "scores", "timeline", "controls", "assessed"):
+        prod = Prompt.ask("Product filter (sase/ngfw/all, blank=all)", default="").strip()
+        if prod:
+            kwargs["product"] = prod
+
+    with console.status(f"[cyan]Running Compliance Center: {action}...[/cyan]"):
+        try:
+            result = _call_mcp_tool(
+                tenant,
+                register_compliance_tools,
+                "scm_compliance_center",
+                **kwargs,
+            )
+        except Exception as exc:
+            result = f"Error: {exc}"
+    if result.startswith("Error"):
+        console.print(f"[red]{result}[/red]")
+    else:
+        console.print(Markdown(result))
+    # (auto-continue — read-only operation)
 
 
 def _op_posture_report(tenant, console, _pause) -> None:
@@ -2442,7 +2519,7 @@ def _op_posture_report(tenant, console, _pause) -> None:
                 console.print("[yellow]No HTTP session available[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]Posture report not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_incident_summary(tenant, console, _pause) -> None:
@@ -2482,7 +2559,7 @@ def _op_incident_summary(tenant, console, _pause) -> None:
                 console.print("[yellow]No HTTP session available[/yellow]")
         except Exception as exc:
             console.print(f"[yellow]Incident summary not available: {exc}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_tls_profile_manager(tenant, console, _pause) -> None:
@@ -2522,7 +2599,7 @@ def _op_tls_profile_manager(tenant, console, _pause) -> None:
                 )
         except Exception as exc:
             console.print(f"[yellow]TLS profiles not available: {_exc_str(exc)}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: Remediation ───────────────────────────────────────────
@@ -2569,7 +2646,7 @@ def _op_attach_ncsc(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_create_ncsc_snippet(tenant, console, _pause) -> None:
@@ -2618,7 +2695,7 @@ def _op_ncsc_gap(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_nist_gap(tenant, console, _pause) -> None:
@@ -2633,7 +2710,7 @@ def _op_nist_gap(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_ai_advisor(tenant, console, _pause) -> None:
@@ -2656,7 +2733,7 @@ def _op_ai_advisor(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: Config Lifecycle ──────────────────────────────────────
@@ -2701,6 +2778,12 @@ def _op_commit(tenant, console, _pause) -> None:
     ).strip()
     folders = [f.strip() for f in folders_input.split(",") if f.strip()]
     desc = Prompt.ask("Description", default="CLI commit").strip()
+    if not Confirm.ask(
+        f"\n[bold yellow]Commit {len(folders)} folder(s) to {tenant.label}?[/bold yellow]",
+        default=False,
+    ):
+        console.print("[dim]Commit cancelled.[/dim]")
+        return
     with console.status(f"[cyan]Committing {len(folders)} folder(s)...[/cyan]"):
         try:
             client.commit(folders=folders, description=desc)
@@ -2718,6 +2801,12 @@ def _op_config_push(tenant, console, _pause) -> None:
     ).strip()
     folders = [f.strip() for f in folders_input.split(",") if f.strip()]
     desc = Prompt.ask("Description", default="CLI push").strip()
+    if not Confirm.ask(
+        f"\n[bold yellow]Push {len(folders)} folder(s) to {tenant.label}?[/bold yellow]",
+        default=False,
+    ):
+        console.print("[dim]Push cancelled.[/dim]")
+        return
     with console.status(f"[cyan]Pushing {len(folders)} folder(s)...[/cyan]"):
         try:
             from .tools.deployment import register_deployment_tools
@@ -2748,6 +2837,12 @@ def _op_config_rollback(tenant, console, _pause) -> None:
         "y",
         "true",
     )
+    if not Confirm.ask(
+        f"\n[bold red]Rollback {tenant.label} to version {version_str}?[/bold red]",
+        default=False,
+    ):
+        console.print("[dim]Rollback cancelled.[/dim]")
+        return
     try:
         version = int(version_str)
     except ValueError:
@@ -2785,7 +2880,7 @@ def _op_adnsr_list(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[yellow]ADNSR not available: {_exc_str(exc)}[/yellow]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_ngfw_devices(tenant, console, _pause) -> None:
@@ -2817,7 +2912,7 @@ def _op_ngfw_devices(tenant, console, _pause) -> None:
                     console.print(f"[dim]Saved: {out}[/dim]")
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_device_summary(tenant, console, _pause) -> None:
@@ -2839,7 +2934,7 @@ def _op_device_summary(tenant, console, _pause) -> None:
 
             if not all_devices:
                 console.print("[yellow]No devices found in any folder.[/yellow]")
-                _pause()
+                # (auto-continue — read-only operation)
                 return
 
             total = len(all_devices)
@@ -2887,7 +2982,7 @@ def _op_device_summary(tenant, console, _pause) -> None:
 
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_ngfw_local_config_list(tenant, console, _pause) -> None:
@@ -2896,7 +2991,7 @@ def _op_ngfw_local_config_list(tenant, console, _pause) -> None:
     serial = Prompt.ask("Device serial number", default="").strip()
     if not serial:
         console.print("[red]Serial number required.[/red]")
-        _pause()
+        # (auto-continue — read-only operation)
         return
     with console.status(f"[cyan]Fetching local config versions for {serial}...[/cyan]"):
         try:
@@ -2908,7 +3003,7 @@ def _op_ngfw_local_config_list(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_ngfw_local_config_get(tenant, console, _pause) -> None:
@@ -2917,7 +3012,7 @@ def _op_ngfw_local_config_get(tenant, console, _pause) -> None:
     serial = Prompt.ask("Device serial number", default="").strip()
     if not serial:
         console.print("[red]Serial number required.[/red]")
-        _pause()
+        # (auto-continue — read-only operation)
         return
     version = Prompt.ask("Version", default="running").strip()
     with console.status(f"[cyan]Fetching config {version} for {serial}...[/cyan]"):
@@ -2934,7 +3029,7 @@ def _op_ngfw_local_config_get(tenant, console, _pause) -> None:
             console.print(result[:5000])
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── leaf operations: Audit & Compliance extras ─────────────────────────────
@@ -2954,7 +3049,7 @@ def _op_nist(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_iso27001(tenant, console, _pause) -> None:
@@ -2971,7 +3066,7 @@ def _op_iso27001(tenant, console, _pause) -> None:
             console.print(result)
         except Exception as exc:
             console.print(f"[red]Error: {_exc_str(exc)}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 def _op_decrypt_audit(tenant, console, _pause) -> None:
@@ -2995,7 +3090,7 @@ def _op_decrypt_audit(tenant, console, _pause) -> None:
             )
         except Exception as exc:
             console.print(f"[red]Error: {exc}[/red]")
-    _pause()
+    # (auto-continue — read-only operation)
 
 
 # ── Static helper for leaf operations that don't have access to closures ───

@@ -60,6 +60,8 @@ _RELOAD_ORDER = [
     "scm_mcp_mssp.tools.deployment",
     "scm_mcp_mssp.tools.dlp",
     "scm_mcp_mssp.tools.posture",
+    "scm_mcp_mssp.tools.compliance",
+    "scm_mcp_mssp.tools.ssr",
     "scm_mcp_mssp.tools.adnsr",
     "scm_mcp_mssp.tools.aiops",
     "scm_mcp_mssp.tools.audit",

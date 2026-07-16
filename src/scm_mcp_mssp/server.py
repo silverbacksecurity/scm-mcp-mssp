@@ -25,6 +25,7 @@ from .tools.adnsr import register_adnsr_tools
 from .tools.ai_advisor import register_ai_advisor_tools
 from .tools.aiops import register_aiops_tools
 from .tools.audit import register_audit_tools
+from .tools.compliance import register_compliance_tools
 from .tools.deployment import register_deployment_tools
 from .tools.dlp import register_dlp_tools
 from .tools.mssp import register_casb_dlp_tools, register_mssp_tools, register_ngfw_airs_tools
@@ -42,6 +43,7 @@ from .tools.sdwan import register_sdwan_tools
 from .tools.security import register_security_tools
 from .tools.service_status import register_service_status_tools
 from .tools.setup import register_setup_tools
+from .tools.ssr import register_ssr_tools
 from .utils.logging import configure_logging, get_logger
 
 if TYPE_CHECKING:
@@ -145,10 +147,12 @@ def register_all_tools(
     """
     register_object_tools(mcp, get_client)
     register_security_tools(mcp, get_client)
+    register_ssr_tools(mcp, get_client)
     register_network_tools(mcp, get_client)
     register_deployment_tools(mcp, get_client)
     register_setup_tools(mcp, get_client)
     register_audit_tools(mcp, get_client)
+    register_compliance_tools(mcp, get_client)
     register_mssp_tools(mcp, get_client, get_settings)
     register_casb_dlp_tools(mcp, get_client)
     register_ngfw_airs_tools(mcp, get_client)

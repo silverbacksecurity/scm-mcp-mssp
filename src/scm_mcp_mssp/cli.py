@@ -123,7 +123,7 @@ def _print_banner(active_tenant: TenantConfig | None = None) -> None:
     else:
         console.print(
             Panel(
-                "[yellow]No tenant selected — choose option 9 to select[/yellow]",
+                "[yellow]No tenant selected — choose option S to select[/yellow]",
                 box=box.ROUNDED,
                 border_style="yellow",
             ),
@@ -314,7 +314,7 @@ def _print_main_menu(tenant: TenantConfig | None) -> None:
                 (
                     "6",
                     "Posture & Incidents",
-                    "Posture report, incident search & summary, TLS manager",
+                    "Posture, SSPM, compliance scores, incidents, TLS certs",
                 ),
                 ("7", "NCSC / NIST Remediation", "Baselines, snippets, gap analysis, AI advisor"),
                 ("8", "Config Lifecycle", "Diff, clone, push, rollback, commit, AIOps BPA, ADNSR"),
@@ -343,7 +343,7 @@ def _print_main_menu(tenant: TenantConfig | None) -> None:
 
 def _require_tenant(tenant: TenantConfig | None) -> TypeGuard[TenantConfig]:
     if tenant is None:
-        console.print("\n[red]No tenant selected. Choose option 9 first.[/red]")
+        console.print("\n[red]No tenant selected. Choose option S first.[/red]")
         Prompt.ask("\nPress Enter to continue")
         return False
     return True

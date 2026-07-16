@@ -77,6 +77,17 @@ class TenantConfig(BaseSettings):
         ),
     )
 
+    # ── SSR (Simple Service Requests) ───────────────────────────────────────
+    ssr_objects: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "SSR-managed object names keyed by type. Maps operation type to the "
+            "SCM object name the SSR tool is allowed to edit (e.g. "
+            '{url_allow_list: "SSR-Allow-List", ssl_decrypt_exclude_rule: "SSR-Decrypt-Exclude"}). '
+            "The tool only touches these named objects — it never edits a rulebase directly."
+        ),
+    )
+
     @field_validator("tenant_id", "client_id")
     @classmethod
     def not_empty(cls, v: str) -> str:
