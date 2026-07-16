@@ -9,6 +9,23 @@ do about it.
 
 ## Recently shipped
 
+- **Agentic ops layer: verify / sentinel / gate** (2026-07-15) — three tool
+  groups built on one section-diff engine (`audit/asbuilt_verify.py`):
+  `scm_asbuilt_verify` (doc-vs-live drift check for AS-BUILT documents
+  before customer handover), the drift sentinel (`scm_drift_baseline` /
+  `scm_drift_check` / `scm_drift_result` — disk-persisted known-good
+  baselines, HIGH/MEDIUM/LOW-triaged overnight sweep with background
+  all-tenants jobs), and `scm_commit_preview` (pre-commit blast-radius
+  gate: pending-change diff vs baseline, rule-shadow detection on the
+  touched rules, BPA introduced/resolved delta, HIGH RISK/REVIEW/LOW RISK
+  verdict). Candidate-vs-pushed note: the config-versions API can list and
+  *load* versions but not read their content, so the gate diffs candidate
+  extraction against the drift baseline — roll it forward with
+  `update_baseline=true` after each approved push. Plus `scm_renewal_brief`
+  (licences + bandwidth + live connected-MU count → renewal-conversation
+  brief with over/under-consumption signals). All live-validated on a lab
+  tenant.
+
 - **Cross-tenant analytics (mt-monitor)** (2026-07-13) — `scm_mt_analytics`
   over the aggregation API: apps/threats/connectivity/incidents rolled up
   across the tenant hierarchy (`agg_by=tenant`), with CDL-region discovery
@@ -190,19 +207,6 @@ and `mcp` also current._
   instead of the full tool set. SDK is ready now: `url_categories`,
   `decryption_rule`, `anti_spyware_profile`, and
   `vulnerability_protection_profile` all have full CRUD in pan-scm-sdk.
-- **Commit blast-radius gate (working name `scm_commit_preview`)** — an
-  agent-facing pre-commit step in front of `scm_commit`: pull the pending
-  candidate changes, run the BPA checks against the would-be state, detect
-  rule shadowing/duplication against the existing rulebase, and emit a
-  plain-English impact statement ("this change shadows rule X; folder is
-  shared by N tenants' snippets") for human sign-off before the commit is
-  issued. Builds on the drift-sentinel diff engine (`audit/asbuilt_verify`)
-  for the object-level delta; the open question is candidate-vs-pushed
-  visibility — SCM's config-versions API exposes pushed versions, so the
-  preview may need to diff candidate extraction against the last pushed
-  version snapshot (`scm_config_versions` + `scm_config_backup` already
-  cover the pieces). This is the governance layer the SSR epic assumes:
-  orchestrator owns sign-off, the gate gives sign-off something to read.
 - **Incident → root-cause correlator (working name `scm_incident_rca`)** —
   given an incident (or a symptom + time window), walk the evidence the
   server already exposes: `scm_config_push_track` / `scm_list_jobs` for

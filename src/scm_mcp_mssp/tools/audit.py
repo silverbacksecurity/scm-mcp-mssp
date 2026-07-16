@@ -30,6 +30,7 @@ from ..audit.asbuilt_report import AsBuiltReportBuilder
 from ..audit.asbuilt_verify import VERIFIED_SECTIONS
 from ..audit.bpa_checks import run_all_checks
 from ..audit.cloner import clone_config
+from ..audit.commit_preview import bpa_delta, find_shadowed_rules, render_commit_preview
 from ..audit.drift_baseline import (
     check_drift,
     diff_snapshots,
@@ -2112,6 +2113,94 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
         if job["status"] == "error":
             return f"Drift job `{job_id}` failed after {mins}m {secs}s: {job['error']}"
         return str(job["result"])
+
+    # ── Commit Preview (blast-radius gate) ───────────────────────────────────
+
+    @mcp.tool()
+    def scm_commit_preview(folder: str = "Prisma Access", tenant_id: str = "") -> str:
+        """Analyse the blast radius of pending changes BEFORE committing.
+
+        Run this instead of going straight to scm_commit. It extracts the
+        current candidate config and compares it against the drift baseline
+        (last known-good, captured by scm_drift_baseline), then reports:
+
+          1. Pending changes — every object the commit would add, remove, or
+             modify, triaged HIGH/MEDIUM/LOW by enforcement impact.
+          2. Rule shadowing — new or changed security rules that an earlier
+             rule fully covers (they can never match), or that themselves
+             shadow existing rules. Conservative literal-value check: group/
+             EDL membership is not resolved, so flagged shadows are real.
+          3. Best-practice delta — BPA findings this change introduces or
+             resolves, by running the check engine against both states.
+
+        Verdict: 🔴 HIGH RISK (shadowing, new critical/high BPA findings, or
+        removals/modifications in enforcement sections) / 🟡 REVIEW / 🟢 LOW
+        RISK / no-op. After an approved commit, run
+        scm_drift_check(update_baseline=True) so the next preview diffs
+        against the newly approved state.
+
+        Requires a drift baseline for the tenant+folder — capture one with
+        scm_drift_baseline after each approved change window.
+
+        Args:
+            folder: SCM folder the pending commit targets.
+            tenant_id: SCM tenant ID (MSSP mode).
+
+        Returns:
+            Markdown blast-radius report with verdict and next steps
+            (~2 min: one fresh candidate extraction).
+        """
+        try:
+            client = get_client(tenant_id)
+            tsg = tenant_id or "default"
+            loaded = load_baseline(tsg, folder, _DEFAULT_BASELINE_DIR)
+            if loaded is None:
+                return (
+                    f"No drift baseline for tenant `{tsg}`, folder `{folder}` — the preview "
+                    "needs a last-known-good reference. Run "
+                    f'`scm_drift_baseline(folder="{folder}", tenant_id="{tenant_id}")` '
+                    "at a point where config is approved, then retry."
+                )
+            baseline, saved_at = loaded
+            candidate = extract_snapshot(client, folder, tsg, fresh=True)
+
+            diffs = check_drift(baseline, candidate)
+
+            # Shadow analysis focused on the rules this commit touches
+            focus: set[str] = set()
+            for d in diffs:
+                if d.fieldname in ("security_rules_pre", "security_rules_post"):
+                    focus |= set(d.added) | set(d.changed)
+            shadows = (
+                find_shadowed_rules(candidate.security_rules_pre, focus)
+                + find_shadowed_rules(candidate.security_rules_post, focus)
+                if focus
+                else []
+            )
+
+            introduced, resolved = bpa_delta(run_all_checks(baseline), run_all_checks(candidate))
+
+            report = render_commit_preview(
+                diffs,
+                shadows,
+                introduced,
+                resolved,
+                tenant_label=tsg,
+                folder=folder,
+                baseline_saved_at=saved_at,
+                generated_at=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            )
+            logger.info(
+                "commit_preview_complete",
+                tenant_id=tsg,
+                folder=folder,
+                drifted=len(diffs),
+                shadows=len(shadows),
+                introduced=len(introduced),
+            )
+            return report
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_commit_preview')}"
 
     # ── Config Diff ───────────────────────────────────────────────────────────
 
