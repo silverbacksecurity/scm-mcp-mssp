@@ -53,6 +53,40 @@ class TestLicenceRows:
         (row,) = _licence_rows(lics)
         assert row["purchased"] == 0 and row["consumed"] == 0
 
+    def test_same_day_bundles_merge_despite_timestamp_seconds(self) -> None:
+        # Real Subscription API data: same SKU, expirations differing by seconds
+        base = _exp(67)[:10]
+        lics = [
+            _bundle(
+                "logging_service",
+                {
+                    "license_type": "Production License",
+                    "license_expiration": f"{base}T10:00:01",
+                    "purchased_size": 1,
+                    "remaining_size": 0,
+                },
+                {
+                    "license_type": "Production License",
+                    "license_expiration": f"{base}T10:00:59",
+                    "purchased_size": 1,
+                    "remaining_size": 0,
+                },
+            )
+        ]
+        (row,) = _licence_rows(lics)
+        assert row["purchased"] == 2
+
+    def test_different_license_types_stay_separate(self) -> None:
+        exp = _exp(67)
+        lics = [
+            _bundle(
+                "prisma_access_edition",
+                {"license_type": "PAE-MU-NFR", "license_expiration": exp, "purchased_size": 1},
+                {"license_type": "PAE-NET-NFR", "license_expiration": exp, "purchased_size": 1},
+            )
+        ]
+        assert len(_licence_rows(lics)) == 2
+
 
 class TestConsumptionSignal:
     def test_zero_contract_is_na(self) -> None:
@@ -70,6 +104,10 @@ class TestConsumptionSignal:
 
     def test_custom_threshold(self) -> None:
         assert _consumption_signal(100, 55, underuse_pct=60) == "UNDERUSED"
+
+    def test_negative_consumption_is_na_not_underused(self) -> None:
+        # Pooled parent SKU: remaining_size > purchased_size → consumed < 0
+        assert _consumption_signal(8201, -4600) == "N/A"
 
 
 class TestRenewalTalkingPoints:
@@ -125,6 +163,18 @@ class TestRenewalTalkingPoints:
     def test_bandwidth_point_when_allocated(self) -> None:
         points = self._points([], bw_total_mbps=500.0, bw_locations=3)
         assert any("500 Mbps" in p and "3" in p for p in points)
+
+    def test_identical_bullets_are_deduplicated(self) -> None:
+        rows = [
+            self._row("logging_service", 67, 1, 1),
+            self._row("logging_service", 67, 1, 1),
+        ]
+        points = self._points(rows)
+        assert len([p for p in points if "Renew" in p]) == 1
+
+    def test_negative_consumption_produces_no_consumption_bullet(self) -> None:
+        points = self._points([self._row("pooled_sku", 300, purchased=8201, consumed=-4600)])
+        assert not any("downsize risk" in p or "true-up" in p for p in points)
 
     def test_no_risks_yields_green_summary(self) -> None:
         points = self._points([self._row("prisma_access", 400, purchased=100, consumed=60)])

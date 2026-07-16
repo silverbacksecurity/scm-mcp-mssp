@@ -448,22 +448,28 @@ def _connected_mu_count(client: Any, tsg_id: str, region: str) -> int | None:
 
 
 def _licence_rows(lics: list[dict]) -> list[dict[str, Any]]:
-    """Group licence bundles by (app_id, expiry) into consumption rows.
+    """Group licence bundles by (app_id, license_type, expiry date) into rows.
+
+    Grouping uses the expiry *date*, not the full timestamp — the Subscription
+    API returns bundles for the same SKU whose expirations differ only in
+    seconds, which would otherwise produce duplicate-looking rows and
+    repeated talking points.
 
     Returns rows sorted soonest-expiry-first, each with:
     app, exp, license_type, purchased, remaining, consumed, days.
     """
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
     for bundle in lics:
         app = bundle.get("app_id", "unknown")
         for sub in bundle.get("licenses", []):
             exp = str(sub.get("license_expiration", ""))
-            key = (app, exp)
+            lic_type = str(sub.get("license_type", ""))
+            key = (app, lic_type, exp[:10])
             if key not in groups:
                 groups[key] = {
                     "app": app,
                     "exp": exp,
-                    "license_type": sub.get("license_type", ""),
+                    "license_type": lic_type,
                     "purchased": 0,
                     "remaining": 0,
                 }
@@ -480,8 +486,13 @@ def _licence_rows(lics: list[dict]) -> list[dict[str, Any]]:
 
 
 def _consumption_signal(purchased: int, consumed: int, underuse_pct: int = 40) -> str:
-    """Classify seat consumption against contract for renewal conversations."""
-    if purchased <= 0:
+    """Classify seat consumption against contract for renewal conversations.
+
+    Negative consumption (remaining > purchased) happens on pooled parent
+    SKUs where the pool exceeds this tenant's purchase — that's a data
+    artefact, not underuse, so it's N/A rather than UNDERUSED.
+    """
+    if purchased <= 0 or consumed < 0:
         return "N/A"
     pct = consumed / purchased * 100
     if pct > 100:
@@ -553,7 +564,8 @@ def _renewal_talking_points(
 
     if not points:
         points.append(f"🟢 No renewal risks detected within the next {horizon_days} days.")
-    return points
+    # Same-SKU bundles can still collapse to word-identical bullets — say it once.
+    return list(dict.fromkeys(points))
 
 
 def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
@@ -1433,10 +1445,16 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
                 }
                 for r in seat_rows:
                     signal = _consumption_signal(r["purchased"], r["consumed"], underuse_pct)
-                    pct = r["consumed"] / r["purchased"] * 100
+                    # Negative consumption = pooled parent SKU artefact; a
+                    # percentage would be misleading noise.
+                    pct_s = (
+                        f"{r['consumed'] / r['purchased'] * 100:.0f}%"
+                        if r["consumed"] >= 0
+                        else "—"
+                    )
                     out.append(
                         f"| `{r['app']}` | {r['purchased']:,} | {r['consumed']:,} "
-                        f"| {pct:.0f}% | {_signal_emoji.get(signal, '')} {signal} |"
+                        f"| {pct_s} | {_signal_emoji.get(signal, '')} {signal} |"
                     )
                 out.append("")
 
