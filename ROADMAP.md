@@ -436,17 +436,23 @@ in .secrets.toml (same credential as scm_ai_compliance_advisor).
   `scm_ike_gateway_list`, `scm_list_jobs` recent changes, `sdwan_events`).
   Read-only triage in v1; remediation suggestions require approval.
 
-### Phase 4 — MSSP cross-tenant layer
+### Phase 4 — MSSP cross-tenant layer ✅ shipped 2026-07-16
 
-- [ ] Estate fan-out: a single trigger (e.g. "morning estate check")
+Delivered as `planner/estate.py` + `scm_estate_check` + the
+`scm-planner-estate` console script: bounded-concurrency per-tenant
+sub-plans at tier depth (bronze ⊂ silver ⊂ gold; Gold's BPA/NCSC/ISO
+share one snapshot via the extractor TTL cache), plus the three
+cross-tenant anomaly rules from the spec. Read-only by construction.
+
+- [x] Estate fan-out: a single trigger (e.g. "morning estate check")
   generates per-tenant sub-plans across all loaded tenants
   (`mssp_list_tenants`), executes with bounded concurrency, aggregates
   results.
-- [ ] Tier-aware planning: read contracted tier per tenant
+- [x] Tier-aware planning: read contracted tier per tenant
   (`mssp_tenant_dashboard`) and scope check depth accordingly — Bronze:
   licensing + cert + connectivity basics; Silver: + posture/compliance +
   change audit; Gold: full BPA/NCSC/ISO27001 assessments + DLP/SSPM posture.
-- [ ] Cross-tenant anomaly rules: flag inconsistencies invisible to
+- [x] Cross-tenant anomaly rules: flag inconsistencies invisible to
   per-tenant analysis (e.g. tenant with SD-WAN topology but zero licences;
   duplicate NFR licence sets expiring across tenants; tenants with zero
   config jobs but full licence bundles).

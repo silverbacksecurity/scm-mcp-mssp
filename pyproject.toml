@@ -30,6 +30,7 @@ scm-mcp = "scm_mcp_mssp.server:main"
 scm-mcp-http = "scm_mcp_mssp.server_http:main"
 scm-mcp-cli = "scm_mcp_mssp.cli:main"
 scm-planner-nightly = "scm_mcp_mssp.planner.nightly:main"
+scm-planner-estate = "scm_mcp_mssp.planner.estate:main"
 
 [dependency-groups]
 dev = [

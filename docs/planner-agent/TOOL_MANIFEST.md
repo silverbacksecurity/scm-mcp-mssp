@@ -19,7 +19,7 @@ defaulting to unattended execution.
 
 ## Schema
 
-One entry per MCP tool (currently 140):
+One entry per MCP tool (currently 141):
 
 ```yaml
 <tool_name>:
@@ -61,7 +61,7 @@ target ≤ ~20 per domain, hard cap 25 enforced in tests):
 | config_change | 20 |
 | posture_compliance | 20 |
 | sdwan | 21 |
-| operational_health | 24 |
+| operational_health | 25 |
 | threat_coverage | 14 |
 | pab | 6 |
 | dlp | 5 |
@@ -98,14 +98,15 @@ Everything not listed here is `read`.
 | `scm_adnsr_profile_create` | |
 | `scm_planner_run` | Phase 3b conversational run — can orchestrate writes named in its approved_write_tools list |
 
-## `scope: cross_tenant` tools (19)
+## `scope: cross_tenant` tools (20)
 
 `mssp_tenant_dashboard`, `mssp_list_tenants`, `mssp_tier_comparison`,
 `mssp_snippet_catalogue`, `scm_tenant_dashboard`, `scm_cert_lifecycle`,
 `scm_mt_analytics`, `scm_incident_summary`, `scm_discover_tenants`,
 `scm_licence_forecast`, `scm_service_maintenance`, `scm_spn_bandwidth`,
 `scm_renewal_brief`, `scm_drift_baseline`, `scm_drift_check`,
-`scm_drift_result`, `scm_planner_run`, `scm_planner_status`, `scm_planner_result`.
+`scm_drift_result`, `scm_planner_run`, `scm_planner_status`, `scm_planner_result`,
+`scm_estate_check`.
 
 ## `known_failure_modes`
 

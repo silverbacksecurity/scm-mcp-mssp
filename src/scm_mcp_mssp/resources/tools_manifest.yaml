@@ -6,7 +6,7 @@
 #
 # Regenerate/verify coverage: tests/unit/test_planner_manifest.py fails
 # whenever a registered tool lacks an entry here (or vice versa).
-# Tools: 140 | write: 22 | domains: 11
+# Tools: 141 | write: 22 | domains: 11
 
 dlp_backup:
   access: read
@@ -383,6 +383,16 @@ scm_edl_list:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_estate_check:
+  access: read
+  domain: operational_health
+  scope: cross_tenant
+  idempotent: true
+  retry_policy: fail_fast
+  known_failure_modes: 'Launches a background estate-wide fan-out (per-tenant
+    sub-plans at tier depth) and returns immediately - re-invoking spawns a
+    duplicate sweep. Read-only by construction (no approver wired). Gold-depth
+    tenants take ~2-3 min each; digest lands at plans/estate-<stamp>.md.'
 scm_folder_get:
   access: read
   domain: deployment

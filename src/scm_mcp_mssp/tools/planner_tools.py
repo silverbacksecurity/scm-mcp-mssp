@@ -288,3 +288,74 @@ def register_planner_tools(mcp: FastMCP, get_client: Any) -> None:  # noqa: ARG0
             f'Follow progress:  scm_planner_status(plan_id="{plan_id}")\n'
             f'Triage report:    scm_planner_result(plan_id="{plan_id}")'
         )
+
+    @mcp.tool()
+    def scm_estate_check(tenants: str = "", concurrency: int = 3) -> str:
+        """Run the tier-aware estate check across every configured tenant.
+
+        One trigger fans out per-tenant sub-plans with bounded concurrency
+        through the Planner loop. Each tenant's contracted tier scopes its
+        check depth — Bronze: licensing + certs + connectivity basics;
+        Silver: + BPA posture + change audit; Gold: + NCSC CAF + ISO 27001 +
+        DLP/SSPM posture. Cross-tenant anomaly rules then flag patterns
+        invisible per-tenant (SD-WAN topology with zero licences, duplicate
+        NFR licence sets, provisioned-but-idle tenants).
+
+        Fully read-only: the estate executor has no approver, so no write
+        tool can run. Gold-depth tenants take ~2-3 minutes each (one shared
+        snapshot extraction feeds all three assessments); the run continues
+        in the background and writes plans/estate-<stamp>.md.
+
+        Args:
+            tenants: Comma-separated tenant labels to include (default: all
+                     configured tenants).
+            concurrency: Parallel tenant sub-plans (default 3).
+
+        Returns:
+            Launch confirmation with tenant count and where the digest will
+            land; follow per-tenant progress via scm_planner_status().
+        """
+        from ..auth.oauth import get_scm_client
+        from ..config.settings import load_all_tenant_configs
+        from ..planner.estate import EstateRunner, TenantSpec, default_fact_gatherer
+
+        wanted = {t.strip().lower() for t in tenants.split(",") if t.strip()}
+        specs: list[TenantSpec] = []
+        for key, tc in load_all_tenant_configs().items():
+            label = tc.label or key
+            if wanted and label.lower() not in wanted and key.lower() not in wanted:
+                continue
+            try:
+                get_scm_client(tc)
+            except Exception as exc:
+                logger.warning("estate_tool_auth_failed", tenant=label, error=str(exc))
+                continue
+            specs.append(TenantSpec(label=label, tenant_id=tc.tenant_id, tier=str(tc.tier)))
+        if not specs:
+            return "No tenants available (auth failures or filter matched nothing)."
+
+        backend = InProcessBackend(mcp)
+        runner = EstateRunner(
+            backend=backend,
+            store=store,
+            gather_facts=default_fact_gatherer(backend),
+            concurrency=concurrency,
+        )
+
+        def _run() -> None:
+            try:
+                path, ranked = runner.run(specs)
+                logger.info("estate_check_complete", digest=path, findings=len(ranked))
+            except Exception as exc:
+                logger.error("estate_check_failed", error=str(exc))
+
+        threading.Thread(target=_run, daemon=True, name="planner-estate").start()
+        tiers = ", ".join(f"{s.label} ({s.tier})" for s in specs[:8])
+        more = f" … +{len(specs) - 8} more" if len(specs) > 8 else ""
+        return (
+            f"Estate check started across {len(specs)} tenant(s) at tier depth "
+            f"({concurrency} concurrent): {tiers}{more}\n\n"
+            "Per-tenant sub-plans appear in scm_planner_status() as they run; the "
+            "aggregated digest lands at plans/estate-<stamp>.md when complete "
+            "(Gold-depth tenants take ~2-3 minutes each)."
+        )
