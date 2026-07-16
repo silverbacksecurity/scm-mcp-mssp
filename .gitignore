@@ -38,6 +38,7 @@ tenant-*.md
 # Dev artefacts
 ai-design-components/
 backups/
+baselines/
 
 # Testing / quality
 .coverage

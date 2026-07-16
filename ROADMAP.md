@@ -190,6 +190,30 @@ and `mcp` also current._
   instead of the full tool set. SDK is ready now: `url_categories`,
   `decryption_rule`, `anti_spyware_profile`, and
   `vulnerability_protection_profile` all have full CRUD in pan-scm-sdk.
+- **Commit blast-radius gate (working name `scm_commit_preview`)** — an
+  agent-facing pre-commit step in front of `scm_commit`: pull the pending
+  candidate changes, run the BPA checks against the would-be state, detect
+  rule shadowing/duplication against the existing rulebase, and emit a
+  plain-English impact statement ("this change shadows rule X; folder is
+  shared by N tenants' snippets") for human sign-off before the commit is
+  issued. Builds on the drift-sentinel diff engine (`audit/asbuilt_verify`)
+  for the object-level delta; the open question is candidate-vs-pushed
+  visibility — SCM's config-versions API exposes pushed versions, so the
+  preview may need to diff candidate extraction against the last pushed
+  version snapshot (`scm_config_versions` + `scm_config_backup` already
+  cover the pieces). This is the governance layer the SSR epic assumes:
+  orchestrator owns sign-off, the gate gives sign-off something to read.
+- **Incident → root-cause correlator (working name `scm_incident_rca`)** —
+  given an incident (or a symptom + time window), walk the evidence the
+  server already exposes: `scm_config_push_track` / `scm_list_jobs` for
+  config pushes in the window, the drift sentinel's baseline diff for what
+  actually changed, `scm_device_summary` + SD-WAN element/servicelink status
+  for infra state, and `scm_cert_lifecycle` for expiries — then rank
+  candidate causes by temporal proximity and blast-radius overlap and draft
+  the customer-facing RFO paragraph (feeds the AS-BUILT/audit DOCX
+  pipeline). Correlation-not-causation caveats stated in the output; every
+  candidate cites its evidence (job ID, diff section, cert CN) so the
+  operator can verify rather than trust.
 - **Branch NAT IP, PA side (IKE peer IP per circuit)** — the SD-WAN side is
   done (see Recently shipped: element status `config_and_events_from` gives
   the post-NAT egress of the circuit the controller connection rides, and

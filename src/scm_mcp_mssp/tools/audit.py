@@ -27,8 +27,16 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from ..audit.asbuilt_report import AsBuiltReportBuilder
+from ..audit.asbuilt_verify import VERIFIED_SECTIONS
 from ..audit.bpa_checks import run_all_checks
 from ..audit.cloner import clone_config
+from ..audit.drift_baseline import (
+    check_drift,
+    diff_snapshots,
+    load_baseline,
+    render_drift_digest,
+    save_baseline,
+)
 from ..audit.dspt_controls import BPA_TO_DSPT, DSPT_ASSERTIONS
 from ..audit.extractor import (
     extract_adem,
@@ -61,19 +69,32 @@ from ..audit.extractor import (
 from ..audit.models import Status
 from ..audit.ncsc_controls import NCSC_CONTROLS
 from ..audit.report import ReportBuilder
-from ..auth.oauth import get_tenant_meta
+from ..auth.oauth import get_scm_client, get_tenant_meta
+from ..config.settings import load_all_tenant_configs
 from ..utils.errors import handle_scm_exception
 from ..utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 _DEFAULT_BACKUP_DIR = Path(os.getenv("SCM_MCP_BACKUP_DIR", "backups"))
+_DEFAULT_BASELINE_DIR = Path(os.getenv("SCM_MCP_BASELINE_DIR", "baselines"))
 
 # Background job store for scm_asbuilt_report / scm_asbuilt_result.
 # Jobs expire after 1 hour. Thread-safe via _JOBS_LOCK.
 _ASBUILT_JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 _JOB_TTL = 3600  # seconds
+
+# Background job store for the drift sentinel's all-tenants sweep
+# (scm_drift_baseline / scm_drift_check with all_tenants=True).
+_DRIFT_JOBS: dict[str, dict[str, Any]] = {}
+
+
+def _prune_drift_jobs() -> None:
+    cutoff = time.time() - _JOB_TTL
+    with _JOBS_LOCK:
+        for jid in [j for j, meta in _DRIFT_JOBS.items() if meta["started_at"] < cutoff]:
+            del _DRIFT_JOBS[jid]
 
 
 def _prune_asbuilt_jobs() -> None:
@@ -1868,6 +1889,229 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
             )
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc, tool='scm_asbuilt_verify')}"
+
+    # ── Drift Sentinel (baseline / check / result) ────────────────────────────
+
+    def _drift_targets(tenant_id: str, all_tenants: bool) -> list[tuple[str, str, Any, str | None]]:
+        """Resolve (label, tsg_id, client, auth_error) per tenant to sweep."""
+        if not all_tenants:
+            return [(tenant_id or "default", tenant_id or "default", get_client(tenant_id), None)]
+        targets: list[tuple[str, str, Any, str | None]] = []
+        for key, tc in load_all_tenant_configs().items():
+            label = tc.label or key
+            try:
+                targets.append((label, tc.tenant_id, get_scm_client(tc), None))
+            except Exception as exc:
+                logger.warning("drift_auth_failed", tenant=key, error=str(exc))
+                targets.append((label, tc.tenant_id, None, str(exc)))
+        return targets
+
+    def _drift_one(
+        mode: str,
+        label: str,
+        tsg_id: str,
+        client: Any,
+        auth_error: str | None,
+        folder: str,
+        update_baseline: bool,
+    ) -> dict[str, Any]:
+        """Run one tenant's baseline capture or drift check. Never raises."""
+        result: dict[str, Any] = {"label": label, "drifted": [], "unverified": 0, "error": None}
+        try:
+            if client is None:
+                result["error"] = f"authentication failed: {auth_error}"
+                return result
+            live = extract_snapshot(client, folder, tsg_id, fresh=True)
+            if mode == "baseline":
+                path = save_baseline(live, _DEFAULT_BASELINE_DIR)
+                populated = sum(1 for _f, _l in VERIFIED_SECTIONS if getattr(live, _f, None))
+                result["path"] = str(path)
+                result["sections"] = populated
+                return result
+            loaded = load_baseline(tsg_id, folder, _DEFAULT_BASELINE_DIR)
+            if loaded is None:
+                result["error"] = (
+                    f"no baseline for folder {folder!r} — run scm_drift_baseline first"
+                )
+                return result
+            baseline, saved_at = loaded
+            result["baseline_saved_at"] = saved_at
+            result["drifted"] = check_drift(baseline, live)
+            result["unverified"] = sum(1 for d in diff_snapshots(baseline, live) if d.unverified)
+            if update_baseline:
+                save_baseline(live, _DEFAULT_BASELINE_DIR)
+                result["baseline_updated"] = True
+            return result
+        except Exception as exc:
+            result["error"] = handle_scm_exception(exc)
+            return result
+
+    def _drift_run(
+        mode: str, folder: str, tenant_id: str, all_tenants: bool, update_baseline: bool
+    ) -> str:
+        """Shared runner: sync for one tenant, background job for a sweep."""
+        targets = _drift_targets(tenant_id, all_tenants)
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+        def _render(results: list[dict[str, Any]]) -> str:
+            if mode == "baseline":
+                lines = [
+                    "## Drift Baselines Captured",
+                    "",
+                    f"**Captured:** {ts}  |  **Folder:** `{folder}`",
+                    "",
+                ]
+                for r in results:
+                    if r.get("error"):
+                        lines.append(f"- ⚠️ {r['label']}: {r['error']}")
+                    else:
+                        lines.append(
+                            f"- ✅ {r['label']}: {r['sections']} populated section(s) → "
+                            f"`{r['path']}`"
+                        )
+                lines.append("")
+                lines.append("Run `scm_drift_check` any time to compare live config against these.")
+                return "\n".join(lines)
+            return render_drift_digest(results, ts)
+
+        if not all_tenants:
+            (label, tsg_id, client, auth_error) = targets[0]
+            return _render(
+                [_drift_one(mode, label, tsg_id, client, auth_error, folder, update_baseline)]
+            )
+
+        _prune_drift_jobs()
+        job_id = uuid.uuid4().hex[:8]
+        with _JOBS_LOCK:
+            _DRIFT_JOBS[job_id] = {
+                "status": "running",
+                "started_at": time.time(),
+                "result": None,
+                "error": None,
+            }
+
+        def _run() -> None:
+            try:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(max_workers=3) as pool:
+                    results = list(
+                        pool.map(
+                            lambda t: _drift_one(
+                                mode, t[0], t[1], t[2], t[3], folder, update_baseline
+                            ),
+                            targets,
+                        )
+                    )
+                digest = _render(results)
+                with _JOBS_LOCK:
+                    _DRIFT_JOBS[job_id]["status"] = "done"
+                    _DRIFT_JOBS[job_id]["result"] = digest
+                logger.info("drift_job_complete", job_id=job_id, mode=mode, tenants=len(targets))
+            except Exception as exc:
+                logger.error("drift_job_failed", job_id=job_id, error=str(exc))
+                with _JOBS_LOCK:
+                    _DRIFT_JOBS[job_id]["status"] = "error"
+                    _DRIFT_JOBS[job_id]["error"] = handle_scm_exception(exc)
+
+        threading.Thread(target=_run, daemon=True, name=f"drift-{job_id}").start()
+        return (
+            f"Drift {mode} sweep started (job `{job_id}`) across {len(targets)} tenant(s).\n\n"
+            f"Each tenant takes ~2 minutes to extract (3 run concurrently). When ready:\n\n"
+            f'    scm_drift_result(job_id="{job_id}")'
+        )
+
+    @mcp.tool()
+    def scm_drift_baseline(
+        folder: str = "Prisma Access",
+        tenant_id: str = "",
+        all_tenants: bool = False,
+    ) -> str:
+        """Capture the known-good config baseline(s) for drift monitoring.
+
+        Extracts a fresh core config snapshot per tenant and stores it on disk
+        (SCM_MCP_BASELINE_DIR, default ./baselines). scm_drift_check later
+        compares live config against these baselines and reports what changed.
+
+        Capture a baseline after a change window closes, when config is in a
+        reviewed, known-good state.
+
+        Args:
+            folder: SCM folder to baseline (default "Prisma Access").
+            tenant_id: SCM tenant ID (MSSP mode) for a single tenant.
+            all_tenants: If True, baseline every configured tenant in a
+                         background job — returns a job ID for scm_drift_result.
+
+        Returns:
+            Capture summary (single tenant, ~2 min) or a job ID (all tenants).
+        """
+        try:
+            return _drift_run("baseline", folder, tenant_id, all_tenants, False)
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_drift_baseline')}"
+
+    @mcp.tool()
+    def scm_drift_check(
+        folder: str = "Prisma Access",
+        tenant_id: str = "",
+        all_tenants: bool = False,
+        update_baseline: bool = False,
+    ) -> str:
+        """Check live config against the stored baseline and report drift.
+
+        Re-extracts a fresh core snapshot per tenant and diffs it section by
+        section against the baseline captured by scm_drift_baseline. Drifted
+        sections are triaged by severity — HIGH (security/NAT/decryption/auth
+        rules, zones, VPN, identity, log forwarding), MEDIUM (protection
+        profiles, posture, EDLs), LOW (address/service/tag plumbing) — and the
+        digest lists exactly which objects were added, removed, or modified.
+
+        This is the overnight sentinel: run it on a schedule with
+        all_tenants=True and review the digest each morning. Unexplained HIGH
+        drift means an unauthorised or unticketed change.
+
+        Args:
+            folder: SCM folder to check (must match the baseline's folder).
+            tenant_id: SCM tenant ID (MSSP mode) for a single tenant.
+            all_tenants: If True, sweep every configured tenant in a
+                         background job — returns a job ID for scm_drift_result.
+            update_baseline: If True, roll the baseline forward to the current
+                             live state after checking — accept the changes as
+                             the new known-good once they are explained.
+
+        Returns:
+            Drift digest (single tenant, ~2 min) or a job ID (all tenants).
+        """
+        try:
+            return _drift_run("check", folder, tenant_id, all_tenants, update_baseline)
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_drift_check')}"
+
+    @mcp.tool()
+    def scm_drift_result(job_id: str) -> str:
+        """Retrieve the digest of an all-tenants drift sweep.
+
+        Args:
+            job_id: Job ID returned by scm_drift_baseline / scm_drift_check
+                    with all_tenants=True (jobs are kept for 1 hour).
+
+        Returns:
+            The capture summary or drift digest, or a status message if the
+            sweep is still running.
+        """
+        with _JOBS_LOCK:
+            job = dict(_DRIFT_JOBS.get(job_id, {}))
+        if not job:
+            active = list(_DRIFT_JOBS.keys())
+            hint = f"  Active jobs: {active}" if active else "  No active jobs."
+            return f"Drift job `{job_id}` not found (expires after 1 hour).\n{hint}"
+        elapsed = int(time.time() - job["started_at"])
+        mins, secs = divmod(elapsed, 60)
+        if job["status"] == "running":
+            return f"Drift job `{job_id}` still running ({mins}m {secs}s). Check again shortly."
+        if job["status"] == "error":
+            return f"Drift job `{job_id}` failed after {mins}m {secs}s: {job['error']}"
+        return str(job["result"])
 
     # ── Config Diff ───────────────────────────────────────────────────────────
 
