@@ -6,7 +6,7 @@
 #
 # Regenerate/verify coverage: tests/unit/test_planner_manifest.py fails
 # whenever a registered tool lacks an entry here (or vice versa).
-# Tools: 139 | write: 22 | domains: 11
+# Tools: 140 | write: 22 | domains: 11
 
 dlp_backup:
   access: read
@@ -443,6 +443,15 @@ scm_ipsec_tunnel_list:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_ir_trigger:
+  access: read
+  domain: operational_health
+  scope: tenant
+  idempotent: true
+  retry_policy: fail_fast
+  known_failure_modes: 'Launches a background read-only triage plan and returns a
+    plan_id - re-invoking spawns a duplicate triage run (do not auto-retry). The
+    triage executor has no approver, so write tools are structurally denied.'
 scm_iso27001_assess:
   access: read
   domain: posture_compliance

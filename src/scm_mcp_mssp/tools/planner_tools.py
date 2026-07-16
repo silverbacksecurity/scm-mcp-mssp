@@ -236,3 +236,55 @@ def register_planner_tools(mcp: FastMCP, get_client: Any) -> None:  # noqa: ARG0
             if path.exists():
                 return path.read_text()
         return f"Plan `{plan_id}` finished ({plan.status.value}) but no report file was found."
+
+    @mcp.tool()
+    def scm_ir_trigger(alert_json: str, tenant_id: str = "", folder: str = "Prisma Access") -> str:
+        """Trigger incident-response triage from an alert payload.
+
+        Classifies the alert into an incident class (tunnel-down,
+        cert-expiry, licence-expiry, config-change, connectivity-degraded,
+        or generic) and runs that class's pre-built READ-ONLY triage template
+        through the Planner loop — e.g. tunnel-down runs the SD-WAN WAN-IP
+        summary, IKE gateway list, recent job audit, SD-WAN events, and the
+        incident root-cause correlator. Templates cannot execute write tools
+        under any input: the triage executor has no approver.
+
+        This is the same surface the HTTP transport exposes at
+        POST /webhook/ir for MT Monitor alert bridges.
+
+        Args:
+            alert_json: The alert as a JSON object string — fields like
+                message/name/category/description drive classification
+                (e.g. '{"message": "IPSec tunnel down on branch-12"}').
+            tenant_id: SCM tenant ID the alert concerns.
+            folder: SCM folder for config-scoped triage steps.
+
+        Returns:
+            The plan_id, detected incident class, and polling instructions
+            (scm_planner_status / scm_planner_result).
+        """
+        import json as _json
+
+        from ..planner.ir import start_ir_run
+
+        try:
+            alert = _json.loads(alert_json or "{}")
+            if not isinstance(alert, dict):
+                return "Error: alert_json must be a JSON object."
+        except _json.JSONDecodeError as exc:
+            return f"Error: invalid JSON in alert_json: {exc}"
+
+        plan_id, incident_class = start_ir_run(
+            InProcessBackend(mcp), store, alert, tenant_id, folder
+        )
+        logger.info("ir_trigger_accepted", plan_id=plan_id, incident_class=incident_class)
+        if not plan_id:
+            return (
+                f"IR triage started (class: {incident_class}) but the plan record has not "
+                "appeared yet — call scm_planner_status() shortly to list runs."
+            )
+        return (
+            f"IR triage `{plan_id}` started — incident class: **{incident_class}**\n\n"
+            f'Follow progress:  scm_planner_status(plan_id="{plan_id}")\n'
+            f'Triage report:    scm_planner_result(plan_id="{plan_id}")'
+        )

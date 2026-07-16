@@ -422,7 +422,15 @@ in .secrets.toml (same credential as scm_ai_compliance_advisor).
   needs workspace credentials and remains open. Original spec: Slack/Teams frontend posting NLQ
   triggers into the same Planner loop; responses stream plan progress and
   final synthesis.
-- [ ] **3c. IR-triggered agent (last).** Webhook from MT Monitor alerts /
+- [x] **3c. IR-triggered agent (last).** ✅ shipped 2026-07-16 — alert →
+  keyword classifier → pre-built READ-ONLY triage template through the
+  same PlannerLoop (tunnel-down runs exactly the spec's example set +
+  scm_incident_rca; plus cert-expiry, licence-expiry, config-change,
+  connectivity-degraded, generic). Surfaces: scm_ir_trigger MCP tool and
+  POST /webhook/ir on the HTTP transport (behind the existing auth
+  middleware). Templates are structurally write-free: the triage executor
+  has no approver, and a test asserts no template names a write tool.
+  Live-validated on a lab tenant. Original spec: Webhook from MT Monitor alerts /
   `scm_incident_search` into the Planner with pre-built triage plan
   templates (e.g. tunnel-down → `sdwan_wan_ip_summary`,
   `scm_ike_gateway_list`, `scm_list_jobs` recent changes, `sdwan_events`).

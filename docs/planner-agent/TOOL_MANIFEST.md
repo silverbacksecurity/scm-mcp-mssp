@@ -19,7 +19,7 @@ defaulting to unattended execution.
 
 ## Schema
 
-One entry per MCP tool (currently 139):
+One entry per MCP tool (currently 140):
 
 ```yaml
 <tool_name>:
@@ -61,7 +61,7 @@ target ≤ ~20 per domain, hard cap 25 enforced in tests):
 | config_change | 20 |
 | posture_compliance | 20 |
 | sdwan | 21 |
-| operational_health | 23 |
+| operational_health | 24 |
 | threat_coverage | 14 |
 | pab | 6 |
 | dlp | 5 |

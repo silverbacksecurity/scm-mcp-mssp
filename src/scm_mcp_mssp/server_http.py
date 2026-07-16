@@ -162,10 +162,44 @@ def create_http_app() -> Starlette:
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "server": "scm-mcp-mssp"})
 
+    async def ir_webhook(request: Request) -> JSONResponse:
+        """Planner Phase 3c: alert bridge → IR triage through the Planner loop.
+
+        POST {"alert": {...}, "tenant_id": "...", "folder": "..."} — goes
+        through the same AuthMiddleware as every other route. The triage
+        template is read-only by construction (no approver is wired), so a
+        forged alert cannot make this endpoint execute a write tool.
+        """
+        from .planner.backend import InProcessBackend
+        from .planner.ir import start_ir_run
+        from .planner.store import PlanStore
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        alert = payload.get("alert")
+        if not isinstance(alert, dict):
+            return JSONResponse({"error": "`alert` must be a JSON object"}, status_code=400)
+
+        plan_id, incident_class = start_ir_run(
+            InProcessBackend(mcp),
+            PlanStore(),
+            alert,
+            tenant_id=str(payload.get("tenant_id", "")),
+            folder=str(payload.get("folder", "Prisma Access")),
+        )
+        logger.info("ir_webhook_accepted", plan_id=plan_id, incident_class=incident_class)
+        return JSONResponse(
+            {"plan_id": plan_id, "incident_class": incident_class, "status": "accepted"},
+            status_code=202,
+        )
+
     app = Starlette(
         routes=[
             Route("/health", health),
             Route("/healthz", health),
+            Route("/webhook/ir", ir_webhook, methods=["POST"]),
             Mount("/", app=sse),
         ]
     )
