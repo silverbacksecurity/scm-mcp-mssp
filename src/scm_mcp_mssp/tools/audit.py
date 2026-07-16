@@ -67,13 +67,15 @@ from ..audit.extractor import (
     extract_traffic_steering,
     extract_ztna_connectors,
 )
+from ..audit.incident_rca import collect_candidates, parse_any_ts, render_rca_report
 from ..audit.models import Status
 from ..audit.ncsc_controls import NCSC_CONTROLS
 from ..audit.report import ReportBuilder
-from ..auth.oauth import get_scm_client, get_tenant_meta
+from ..auth.oauth import fetch_licenses, get_scm_client, get_tenant_meta
 from ..config.settings import load_all_tenant_configs
 from ..utils.errors import handle_scm_exception
 from ..utils.logging import get_logger
+from .ops import _CERT_FOLDERS, _fetch_certs, _licence_rows
 
 logger = get_logger(__name__)
 
@@ -2201,6 +2203,137 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
             return report
         except Exception as exc:
             return f"Error: {handle_scm_exception(exc, tool='scm_commit_preview')}"
+
+    # ── Incident Root-Cause Correlation ───────────────────────────────────────
+
+    @mcp.tool()
+    def scm_incident_rca(
+        incident_time: str = "",
+        symptom: str = "",
+        lookback_hours: int = 24,
+        folder: str = "Prisma Access",
+        tenant_id: str = "",
+        include_drift: bool = True,
+    ) -> str:
+        """Correlate an incident with config pushes, expiries, and drift.
+
+        Given an incident time (default: now), walks the evidence this server
+        can reach and ranks candidate causes by temporal proximity:
+
+          - Config pushes/commits (job history: who, what, result — failed
+            jobs rank ahead of successful ones at equal distance)
+          - Certificate expiries falling inside the window
+          - Licence expiries falling inside the window
+          - Config drift vs the drift baseline — presented separately as
+            state evidence, since extraction shows *what* differs, not *when*
+
+        Output ends with a customer-facing RFO draft citing the top candidate
+        and an explicit correlation-not-causation caveat, plus a list of
+        evidence sources this run could not check.
+
+        Args:
+            incident_time: Incident timestamp, UTC — "YYYY-MM-DD HH:MM" or
+                           epoch seconds. Empty = now (investigating live).
+            symptom: Short symptom description for the report and RFO draft
+                     (e.g. "branch VPN tunnels down in region X").
+            lookback_hours: Evidence window before the incident (default 24).
+            folder: SCM folder for the drift comparison.
+            tenant_id: SCM tenant ID (MSSP mode).
+            include_drift: If False, skip the ~2-minute drift extraction and
+                           correlate timestamped evidence only.
+
+        Returns:
+            Markdown RCA report: ranked candidate table, drift state
+            evidence, RFO draft, and caveats.
+        """
+        try:
+            client = get_client(tenant_id)
+            tsg = tenant_id or "default"
+            incident_dt = parse_any_ts(incident_time) or datetime.now(UTC)
+            unchecked: list[str] = [
+                "SD-WAN element/servicelink status (use scm_sdwan tools to correlate manually "
+                "on SD-WAN tenants)",
+                "Prisma Access Insights alerts (RBAC 403 on current service accounts)",
+            ]
+
+            jobs: list[dict[str, Any]] = []
+            try:
+                resp = client.list_jobs(limit=200, offset=0)
+                for j in resp.data if hasattr(resp, "data") else []:
+                    parent = str(getattr(j, "parent_id", "") or "")
+                    if parent not in ("0", "", "None"):
+                        continue  # child jobs duplicate their parent push
+                    jobs.append(
+                        {
+                            "job_id": str(getattr(j, "id", "")),
+                            "type": str(getattr(j, "type_str", getattr(j, "job_type", ""))),
+                            "result": str(getattr(j, "result_str", "")),
+                            "user": str(getattr(j, "uname", "")),
+                            "description": str(getattr(j, "description", "") or ""),
+                            "start_ts": str(getattr(j, "start_ts", "")),
+                            "end_ts": str(getattr(j, "end_ts", "")),
+                        }
+                    )
+            except Exception as exc:
+                unchecked.append(f"config job history (list_jobs failed: {exc})")
+
+            certs: list[dict[str, Any]] = []
+            session = getattr(client, "session", None)
+            if session is not None:
+                seen: set[str] = set()
+                for f in dict.fromkeys([folder, *_CERT_FOLDERS]):
+                    for c in _fetch_certs(session, f):
+                        cid = str(c.get("id", c.get("name", "")))
+                        if cid not in seen:
+                            seen.add(cid)
+                            certs.append(c)
+            else:
+                unchecked.append("certificate expiries (no HTTP session)")
+
+            try:
+                lic_rows = _licence_rows(fetch_licenses(client))
+            except Exception as exc:
+                lic_rows = []
+                unchecked.append(f"licence expiries (fetch failed: {exc})")
+
+            candidates = collect_candidates(incident_dt, lookback_hours, jobs, certs, lic_rows)
+
+            drifted: list[Any] = []
+            baseline_saved_at: str | None = None
+            if include_drift:
+                loaded = load_baseline(tsg, folder, _DEFAULT_BASELINE_DIR)
+                if loaded is None:
+                    unchecked.append(
+                        "config drift (no baseline — run scm_drift_baseline to enable)"
+                    )
+                else:
+                    baseline, baseline_saved_at = loaded
+                    live = extract_snapshot(client, folder, tsg, fresh=True)
+                    drifted = check_drift(baseline, live)
+            else:
+                unchecked.append("config drift (include_drift=False)")
+
+            report = render_rca_report(
+                incident_dt,
+                symptom,
+                lookback_hours,
+                candidates,
+                drifted,
+                baseline_saved_at,
+                unchecked,
+                tenant_label=tsg,
+                folder=folder,
+                generated_at=datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            )
+            logger.info(
+                "incident_rca_complete",
+                tenant_id=tsg,
+                candidates=len(candidates),
+                drifted=len(drifted),
+            )
+            return report
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_incident_rca')}"
 
     # ── Config Diff ───────────────────────────────────────────────────────────
 

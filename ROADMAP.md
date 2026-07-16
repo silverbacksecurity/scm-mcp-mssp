@@ -24,7 +24,13 @@ do about it.
   `update_baseline=true` after each approved push. Plus `scm_renewal_brief`
   (licences + bandwidth + live connected-MU count → renewal-conversation
   brief with over/under-consumption signals). All live-validated on a lab
-  tenant.
+  tenant. Completed the set with `scm_incident_rca` (2026-07-15): incident →
+  root-cause correlation ranking config pushes, cert expiries, and licence
+  expiries by temporal proximity (drift shown separately as state evidence),
+  ending in a customer-facing RFO draft with cited evidence and an explicit
+  correlation-not-causation caveat. SD-WAN status and Insights alerts are
+  disclosed as unchecked (RBAC) rather than silently skipped — add them as
+  evidence sources when a monitor-role service account lands.
 
 - **Cross-tenant analytics (mt-monitor)** (2026-07-13) — `scm_mt_analytics`
   over the aggregation API: apps/threats/connectivity/incidents rolled up
@@ -207,17 +213,6 @@ and `mcp` also current._
   instead of the full tool set. SDK is ready now: `url_categories`,
   `decryption_rule`, `anti_spyware_profile`, and
   `vulnerability_protection_profile` all have full CRUD in pan-scm-sdk.
-- **Incident → root-cause correlator (working name `scm_incident_rca`)** —
-  given an incident (or a symptom + time window), walk the evidence the
-  server already exposes: `scm_config_push_track` / `scm_list_jobs` for
-  config pushes in the window, the drift sentinel's baseline diff for what
-  actually changed, `scm_device_summary` + SD-WAN element/servicelink status
-  for infra state, and `scm_cert_lifecycle` for expiries — then rank
-  candidate causes by temporal proximity and blast-radius overlap and draft
-  the customer-facing RFO paragraph (feeds the AS-BUILT/audit DOCX
-  pipeline). Correlation-not-causation caveats stated in the output; every
-  candidate cites its evidence (job ID, diff section, cert CN) so the
-  operator can verify rather than trust.
 - **Branch NAT IP, PA side (IKE peer IP per circuit)** — the SD-WAN side is
   done (see Recently shipped: element status `config_and_events_from` gives
   the post-NAT egress of the circuit the controller connection rides, and
