@@ -39,6 +39,7 @@ tenant-*.md
 ai-design-components/
 backups/
 baselines/
+plans/
 
 # Testing / quality
 .coverage

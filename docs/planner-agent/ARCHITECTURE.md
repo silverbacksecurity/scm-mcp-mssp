@@ -1,8 +1,20 @@
-# Planner Agent — Architecture (stub)
+# Planner Agent — Architecture
 
-> Status: **design stub** — no implementation yet. See the
-> "Planner Agent — Agentic Orchestration Layer" epic in
-> [ROADMAP.md](../../ROADMAP.md) for phases, priorities, and constraints.
+> Status: **Phases 1–2 implemented** (2026-07-15). Phase 1: tool manifest +
+> safety rails (`scm_mcp_mssp.planner.manifest`, see
+> [TOOL_MANIFEST.md](TOOL_MANIFEST.md)). Phase 2: the loop core —
+> `planner/schema.py` (the persisted Plan below, as Pydantic models),
+> `planner/store.py` (atomic JSON per run under `plans/` + JSONL audit
+> trail), `planner/executor.py` (manifest-enforced execution: unknown tools
+> refused, writes gated on an approval callback with deny-by-default,
+> max-2-retries), `planner/engine.py` (Claude Opus 4.8 via
+> `messages.parse()` structured outputs, behind a Protocol so the loop
+> tests with fakes), `planner/loop.py` (run/resume with the
+> always-finish-with-a-report guarantee), and `planner/backend.py`
+> (in-process FastMCP backend; a Streamable-HTTP backend implements the
+> same protocol later). Phase 3 trigger surfaces are not built yet — the
+> loop is invoked programmatically. See the epic in
+> [ROADMAP.md](../../ROADMAP.md) for remaining phases.
 
 The Planner Agent is an agentic orchestration layer above the existing
 125-tool scm-mcp-mssp MCP server. It follows the PANW "NetSec Agents on

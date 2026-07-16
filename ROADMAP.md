@@ -361,30 +361,39 @@ has no bypass; unknown tools raise) — the loop that calls it is Phase 2.
   domain's tools (~15–20) into context per sub-plan, keeping total loaded
   tools under the 128-tool Copilot Studio ceiling.
 
-### Phase 2 — Planner loop core (target: 2–3 weeks)
+### Phase 2 — Planner loop core ✅ core shipped 2026-07-15
 
-- [ ] Implement the loop: Trigger → Intent parse → Plan generation →
+Delivered as the `scm_mcp_mssp.planner` package: schema/store/executor/
+engine/loop (see docs/planner-agent/ARCHITECTURE.md status note). Claude
+Opus 4.8 with structured outputs is the reasoning engine; the in-process
+FastMCP backend is the first ToolBackend (Streamable-HTTP later). The
+sub-plan delegation item is partial: `build_catalog(domains=[...])`
+scopes context per domain, but a dedicated domain-executor wiring lands
+with the Phase 3a MVP. Live-engine smoke pending an anthropic_api_key
+in .secrets.toml (same credential as scm_ai_compliance_advisor).
+
+- [x] Implement the loop: Trigger → Intent parse → Plan generation →
   Execute step → Observe result → Revise plan → repeat → Synthesis →
   Report/notify.
-- [ ] Define a persisted Plan schema (JSON, stored per run): `plan_id`,
+- [x] Define a persisted Plan schema (JSON, stored per run): `plan_id`,
   `trigger_type`, `trigger_payload`, persona/service-account identity,
   `tenant_scope` (single ID, list, or "all"), `goal`, ordered `steps[]` each
   with `{step_id, domain, tool, params, status:
   pending|running|ok|failed|skipped, result_summary, retries, started_at,
   finished_at}`, `revision_history[]`, `final_report_ref`.
-- [ ] Use Claude via the Anthropic API (tool-use) as the reasoning engine;
+- [x] Use Claude via the Anthropic API (tool-use) as the reasoning engine;
   the existing scm-mcp-mssp MCP server is the tool backend over Streamable
   transport (reuse the Copilot Studio transport work).
 - [ ] Implement sub-plan delegation: Planner selects domain → domain-scoped
   executor runs with only that domain's tools loaded.
-- [ ] Failure policy in the loop: max 2 retries per step; on
+- [x] Failure policy in the loop: max 2 retries per step; on
   validation/schema errors use the manifest's fallback tool; on server
   timeout mark step failed and continue where the plan allows; always finish
   with a partial report rather than aborting the run. Plans must be
   resumable after MCP server restart (the server has known timeout/crash
   behaviour — treat this as a first-class scenario, and allow the Planner to
   invoke `scm_reload`/`scm_restart` as a recovery action with approval).
-- [ ] Full audit trail: every tool call, param set, and result summary
+- [x] Full audit trail: every tool call, param set, and result summary
   persisted against the `plan_id`.
 
 ### Phase 3 — Trigger surfaces (priority order)
