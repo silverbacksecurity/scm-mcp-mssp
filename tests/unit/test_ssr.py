@@ -414,3 +414,83 @@ def test_validate_threat_id() -> None:
     assert _validate_target("threat-exception", "12345678") is None
     assert _validate_target("threat-exception", "abc") is not None
     assert _validate_target("threat-exception", "12") is not None
+
+
+# ---------------------------------------------------------------------------
+# Tests — review fixes (2026-07-15): status contract + no cross-tenant bleed
+# ---------------------------------------------------------------------------
+
+
+class _ExplodingResource:
+    def fetch(self, name: str = "", folder: str = "") -> Any:  # noqa: ARG002
+        raise RuntimeError("boom: profile fetch failed")
+
+
+def test_threat_exception_all_profiles_failing_reports_error_status(monkeypatch: Any) -> None:
+    """If every configured profile errors, status must NOT read applied."""
+    client = _make_mock_client()
+    client.anti_spyware_profile = _ExplodingResource()
+    client.vulnerability_protection_profile = _ExplodingResource()
+    result = _invoke(
+        monkeypatch,
+        client,
+        operation="threat-exception",
+        target="12345",
+        ticket_ref="INC-1",
+        dry_run=False,
+    )
+    assert result["status"] == "error"
+    assert result["errors"]
+    assert result["commit_required"] is False
+
+
+def test_threat_exception_noop_does_not_require_commit(monkeypatch: Any) -> None:
+    """already_present on every profile means nothing changed — no commit needed."""
+    existing = {"name": "12345", "action": {"allow": {}}}
+    client = _make_mock_client(
+        asp_data={"name": "SSR-AntiSpyware", "threat_exception": [dict(existing)]},
+        vp_data={"name": "SSR-VulnProtection", "threat_exception": [dict(existing)]},
+    )
+    result = _invoke(
+        monkeypatch,
+        client,
+        operation="threat-exception",
+        target="12345",
+        ticket_ref="INC-1",
+        dry_run=False,
+    )
+    assert result["already_present"] is True
+    assert result["commit_required"] is False
+
+
+def test_threat_exception_change_requires_commit_even_in_dry_run(monkeypatch: Any) -> None:
+    client = _make_mock_client()
+    result = _invoke(
+        monkeypatch,
+        client,
+        operation="threat-exception",
+        target="99999",
+        ticket_ref="INC-1",
+        dry_run=True,
+    )
+    assert result["status"] == "planned"
+    assert result["commit_required"] is True
+
+
+def test_unmatched_tenant_id_gets_no_other_tenants_ssr_config() -> None:
+    """Explicit tenant_id with no config match must return {} — never another
+    tenant's allowlist (cross-tenant bleed)."""
+    from unittest.mock import patch
+
+    from scm_mcp_mssp.tools.ssr import _get_ssr_config, _resolve_default_folder
+
+    fake_tc = MagicMock()
+    fake_tc.tenant_id = "111"
+    fake_tc.ssr_objects = {"url_allow_list": "Other-Tenant-List"}
+    fake_tc.default_folder = "Other-Folder"
+    with patch("scm_mcp_mssp.tools.ssr.load_all_tenant_configs", return_value={"other": fake_tc}):
+        assert _get_ssr_config("999") == {}
+        assert _resolve_default_folder("999") == ""
+        # empty tenant_id keeps the single-tenant fallback
+        assert _get_ssr_config("") == {"url_allow_list": "Other-Tenant-List"}
+        assert _resolve_default_folder("") == "Other-Folder"

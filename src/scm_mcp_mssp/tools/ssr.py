@@ -64,13 +64,17 @@ def _get_ssr_config(tenant_id: str) -> dict[str, str]:
     """Return the ``ssr_objects`` dict for *tenant_id*, or {} if not configured.
 
     When *tenant_id* is empty the first configured tenant's SSR objects are
-    returned (single-tenant fallback).
+    returned (single-tenant fallback). An explicit *tenant_id* that matches
+    no configured tenant returns {} — never another tenant's allowlist, which
+    would let a change request execute against object names approved for a
+    different customer.
     """
     tenants = load_all_tenant_configs()
     if tenant_id:
         for _key, tc in tenants.items():
             if tc.tenant_id == tenant_id:
                 return tc.ssr_objects
+        return {}
     if tenants:
         first = next(iter(tenants.values()))
         return first.ssr_objects
@@ -338,9 +342,18 @@ def _handle_threat_exception(
             errors.append(f"{profile_name}: {exc}")
             logger.warning("ssr_threat_failed", profile=profile_name, error=str(exc))
 
-    status = "planned" if dry_run else "applied"
+    # Machine-first contract: if every configured profile errored, nothing was
+    # (or would be) changed — status MUST say so, or an orchestrator reading
+    # "applied" would proceed to commit a no-op.
+    status = "error" if errors and not results else "planned" if dry_run else "applied"
     already_present = all(r.get("already_present") for r in results.values()) if results else False
     already_absent = all(r.get("already_absent") for r in results.values()) if results else False
+    # Consistent with the URL/SSL handlers: True whenever a change was made or
+    # is planned — not for pure no-ops (already_present/absent on every profile).
+    changed = any(
+        "after" in r and not r.get("already_present") and not r.get("already_absent")
+        for r in results.values()
+    )
 
     return _response(
         "threat-exception",
@@ -350,7 +363,7 @@ def _handle_threat_exception(
         status,
         already_present=already_present,
         already_absent=already_absent,
-        commit_required=(not dry_run),
+        commit_required=changed,
         extra={"profiles": results, "errors": errors or None},
     )
 
@@ -638,12 +651,18 @@ def register_ssr_tools(mcp: FastMCP, get_client: Any) -> None:
 
 
 def _resolve_default_folder(tenant_id: str) -> str:
-    """Return the default folder for *tenant_id*, falling back to the first tenant's."""
+    """Return the default folder for *tenant_id*.
+
+    An explicit *tenant_id* that matches no configured tenant returns "" (the
+    caller errors out) rather than another tenant's folder — the same
+    no-cross-tenant-bleed rule as _get_ssr_config.
+    """
     tenants = load_all_tenant_configs()
     if tenant_id:
         for tc in tenants.values():
             if tc.tenant_id == tenant_id:
                 return tc.default_folder
+        return ""
     if tenants:
         return next(iter(tenants.values())).default_folder
     return "Shared"

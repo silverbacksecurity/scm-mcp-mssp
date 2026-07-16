@@ -27,6 +27,26 @@ _INSIGHTS_BASE_V1 = "https://api.sase.paloaltonetworks.com/api/sase/v1.0/resourc
 _REGION_MAP = {"eu": "europe", "uk": "uk", "us": "americas", "sg": "sg", "au": "au"}
 
 
+def _refresh_token(client: Any) -> None:
+    """Refresh the OAuth token before direct-session calls.
+
+    is_expired/token_expires_soon can miss stale tokens (see
+    scm_mobile_user_stats) — always attempt an unconditional refresh so a
+    long-lived server session never hits TokenExpiredError mid-request.
+    """
+    oauth = getattr(client, "oauth_client", None)
+    if oauth is None:
+        return
+    try:
+        oauth.refresh_token()
+    except Exception:
+        try:
+            if oauth.is_expired or oauth.token_expires_soon:
+                oauth.refresh_token()
+        except Exception:  # noqa: S110 - best-effort; the request surfaces auth errors
+            pass
+
+
 def _insights_call(
     session: Any,
     path: str,
@@ -40,8 +60,9 @@ def _insights_call(
         "Content-Type": "application/json",
         "Accept": "application/json",
         "X-PANW-Region": region,
-        "Prisma-Tenant": str(tenant_id),
     }
+    if tenant_id:  # never send an empty Prisma-Tenant header
+        headers["Prisma-Tenant"] = str(tenant_id)
     resp = session.post(path, json=body or {}, headers=headers, timeout=timeout)
     try:
         return resp.status_code, resp.json()
@@ -105,6 +126,7 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
             session = getattr(client, "session", None)
             if not session:
                 return "Error: no HTTP session available on SCM client."
+            _refresh_token(client)
 
             # --- Resolve region ---
             if not region:
