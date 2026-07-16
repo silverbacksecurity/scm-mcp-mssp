@@ -132,15 +132,15 @@ class TestAnnotateWanIpDrift:
         base = {
             "site_name": "Branch-1",
             "interface_name": "1",
-            "wan_network": "BT-INET-1",
+            "wan_network": "ACME-INET-1",
             "circuit_name": "Branch-1 Internet",
             "site_location": {"latitude": 51.5, "longitude": -0.12},
             "enrichment": [
                 {
                     "ip": "8.8.8.8",
-                    "isp": "BT Group",
-                    "org": "British Telecom",
-                    "as_name": "BTNET",
+                    "isp": "Acme Group",
+                    "org": "Acme Telecom",
+                    "as_name": "ACMENET",
                     "city": "London",
                     "country": "United Kingdom",
                     "latitude": 51.51,
@@ -154,7 +154,7 @@ class TestAnnotateWanIpDrift:
     def test_matching_isp_and_geo_not_flagged(self) -> None:
         from scm_mcp_mssp.audit.extractor import annotate_wan_ip_drift
 
-        rec = self._rec()  # "bt" token matches, IP ~1 km from site
+        rec = self._rec()  # "acme" token matches, IP ~1 km from site
         assert annotate_wan_ip_drift([rec]) == 0
         assert "drift" not in rec
 
