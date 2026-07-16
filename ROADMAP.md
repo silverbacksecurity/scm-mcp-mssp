@@ -318,9 +318,17 @@ secondary.
 Spec/design docs live in `docs/planner-agent/` (ARCHITECTURE.md,
 TOOL_MANIFEST.md).
 
-### Phase 1 — Tool taxonomy & safety rails (target: 1–2 weeks)
+### Phase 1 — Tool taxonomy & safety rails ✅ shipped 2026-07-15
 
-- [ ] Create a tool manifest (`tools_manifest.yaml` or similar) covering all
+Delivered as `src/scm_mcp_mssp/resources/tools_manifest.yaml` (135 tools) +
+the `scm_mcp_mssp.planner` loader with the non-overridable write-approval
+rule, and a CI coverage test that fails whenever a tool is registered
+without a manifest entry. See docs/planner-agent/TOOL_MANIFEST.md for the
+implemented schema, API, and domain groupings. The "enforce in the
+execution layer" item is delivered at the API layer (`requires_approval()`
+has no bypass; unknown tools raise) — the loop that calls it is Phase 2.
+
+- [x] Create a tool manifest (`tools_manifest.yaml` or similar) covering all
   125 MCP tools with fields:
   - `access: read | write` — write tools: `scm_commit`,
     `scm_security_rule_create`, `scm_security_rule_delete`,
@@ -346,10 +354,10 @@ TOOL_MANIFEST.md).
     Pydantic validation error on names with spaces and
     `bgp_peer.same_as_primary` field; fallback = `scm_ike_gateway_list`
     correlation)
-- [ ] Enforce a hard rule in the execution layer: `access: write` tools
+- [x] Enforce a hard rule in the execution layer: `access: write` tools
   ALWAYS require explicit human approval before execution, regardless of
   trigger type. No config flag can disable this in v1.
-- [ ] Document per-domain tool groupings so the Planner loads only one
+- [x] Document per-domain tool groupings so the Planner loads only one
   domain's tools (~15–20) into context per sub-plan, keeping total loaded
   tools under the 128-tool Copilot Studio ceiling.
 

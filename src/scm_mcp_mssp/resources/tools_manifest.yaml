@@ -1,0 +1,857 @@
+# Planner Agent tool manifest — one entry per registered MCP tool.
+#
+# Safety rail: access: write tools ALWAYS require explicit human approval
+# before execution, regardless of trigger type. The loader
+# (scm_mcp_mssp.planner.manifest) exposes no way to disable this in v1.
+#
+# Regenerate/verify coverage: tests/unit/test_planner_manifest.py fails
+# whenever a registered tool lacks an entry here (or vice versa).
+# Tools: 135 | write: 21 | domains: 11
+
+dlp_backup:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+dlp_enterprise_list:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+dlp_restore:
+  access: write
+  domain: dlp
+  idempotent: false
+  known_failure_modes: Overwrites live DLP profiles from a backup file — not reversible.
+  retry_policy: fail_fast
+  scope: tenant
+mssp_evict_tenant:
+  access: write
+  domain: identity
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+mssp_list_tenants:
+  access: read
+  domain: identity
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+mssp_onboard_tenant:
+  access: write
+  domain: identity
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+mssp_snippet_catalogue:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+mssp_tenant_dashboard:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+mssp_tier_assess:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+mssp_tier_comparison:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+mssp_tier_report:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+mssp_upgrade_path:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_address_create:
+  access: write
+  domain: config_change
+  idempotent: false
+  known_failure_modes: On RBAC 403 the SDK raises 'Invalid error response format' (ValueError)
+    with the real HTTP status hidden in the chained exception.
+  retry_policy: fail_fast
+  scope: tenant
+scm_address_delete:
+  access: write
+  domain: config_change
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_address_get:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_address_group_list:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_address_list:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_adnsr_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_adnsr_profile_create:
+  access: write
+  domain: threat_coverage
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_ai_compliance_advisor:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_aiops_bpa:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_airs_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_anti_spyware_profile_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_apply_ncsc_baseline:
+  access: write
+  domain: posture_compliance
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_asbuilt_report:
+  access: read
+  domain: operational_health
+  idempotent: true
+  known_failure_modes: 'Async: returns a job ID; extraction takes 2-4 min — poll scm_asbuilt_result.
+    allocated_ips 403 on view_only_admin roles is recorded as an extraction gap, not a failure.'
+  retry_policy: retry
+  scope: tenant
+scm_asbuilt_result:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_asbuilt_verify:
+  access: read
+  domain: operational_health
+  idempotent: true
+  known_failure_modes: Requires the originating job (kept 1 hour) to have completed with a
+    stored snapshot; re-extraction takes ~2 min.
+  retry_policy: retry
+  scope: tenant
+scm_attach_ncsc_profiles:
+  access: write
+  domain: posture_compliance
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_audit_report:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_bandwidth_allocation_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_bpa_assess:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_browser_list:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_casb_list:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_cert_import:
+  access: write
+  domain: certificates
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_cert_lifecycle:
+  access: read
+  domain: certificates
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_cert_scan:
+  access: read
+  domain: certificates
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_check_updates:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_commit:
+  access: write
+  domain: config_change
+  idempotent: false
+  known_failure_modes: Sync commit blocks up to 300s. Commits EVERYTHING pending in the folder,
+    not just this session's changes — run scm_commit_preview first.
+  retry_policy: fail_fast
+  scope: tenant
+scm_commit_preview:
+  access: read
+  domain: config_change
+  idempotent: true
+  known_failure_modes: Requires a drift baseline as the last-known-good reference; ~2 min
+    candidate extraction. Shadow findings use merged-folder rule order — verify positions.
+  retry_policy: retry
+  scope: tenant
+scm_compliance_center:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_compliance_framework:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_config_backup:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_config_clone:
+  access: write
+  domain: config_change
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_config_diff:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_config_push_track:
+  access: write
+  domain: config_change
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_config_rollback:
+  access: write
+  domain: config_change
+  idempotent: false
+  known_failure_modes: Loads a prior version into candidate; with commit_immediately=true
+    it pushes straight to the running config.
+  retry_policy: fail_fast
+  scope: tenant
+scm_config_versions:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_create_ncsc_snippet:
+  access: write
+  domain: posture_compliance
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_create_nist_snippet:
+  access: write
+  domain: posture_compliance
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_decrypt_policy_audit:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_device_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_device_summary:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_discover_tenants:
+  access: read
+  domain: identity
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_dlp_list:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_dns_server_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_drift_baseline:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_drift_check:
+  access: read
+  domain: config_change
+  idempotent: true
+  known_failure_modes: Requires a baseline captured by scm_drift_baseline for the same tenant+folder;
+    ~2 min extraction per tenant; all_tenants returns a job ID for scm_drift_result.
+  retry_policy: retry
+  scope: cross_tenant
+scm_drift_result:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_dspt_assess:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_edl_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_folder_get:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_folder_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_gp_session_summary:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ike_gateway_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_incident_rca:
+  access: read
+  domain: operational_health
+  idempotent: true
+  known_failure_modes: Insights alerts and SD-WAN status are not evidence sources yet (RBAC)
+    — the report discloses unchecked sources; drift evidence needs a baseline.
+  retry_policy: retry
+  scope: tenant
+scm_incident_search:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_incident_summary:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_ipsec_tunnel_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_iso27001_assess:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_job_status:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_licence_forecast:
+  access: read
+  domain: licensing
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_license_info:
+  access: read
+  domain: licensing
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_list_jobs:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_mobile_user_stats:
+  access: read
+  domain: operational_health
+  idempotent: true
+  known_failure_modes: Insights connected-user endpoints may 403 on view-only service accounts;
+    tool degrades per-section rather than failing.
+  retry_policy: retry
+  scope: tenant
+scm_mt_analytics:
+  access: read
+  domain: operational_health
+  idempotent: true
+  known_failure_modes: Tenant data may live in a different CDL region than insights_region
+    claims (eu labs store in uk — tool tries the sibling); applications/list and locationsUsers
+    reject the spec's own examples.
+  retry_policy: retry
+  scope: cross_tenant
+scm_nat_rule_get:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_nat_rule_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ncsc_assess:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ncsc_gap:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ngfw_device_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ngfw_local_config_get:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ngfw_local_config_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_ngfw_wan_ip_summary:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_nist_gap:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_pab_apps:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_pab_inventory:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_pab_msp_report:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_pab_msp_summary:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_pab_user_requests:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_posture_report:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_reload:
+  access: write
+  domain: operational_health
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_remote_network_get:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_remote_network_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  known_failure_modes: 'SDK Pydantic validation error on names with spaces and on bgp_peer.same_as_primary.
+    Fallback: scm_ike_gateway_list correlation.'
+  retry_policy: fallback
+  scope: tenant
+scm_renewal_brief:
+  access: read
+  domain: licensing
+  idempotent: true
+  known_failure_modes: Pooled parent SKUs can report remaining > purchased (negative consumption)
+    — rendered N/A by design, not an error.
+  retry_policy: retry
+  scope: cross_tenant
+scm_restart:
+  access: write
+  domain: operational_health
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_saas_posture:
+  access: read
+  domain: posture_compliance
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_security_rule_create:
+  access: write
+  domain: threat_coverage
+  idempotent: false
+  known_failure_modes: On RBAC 403 the SDK raises 'Invalid error response format' — see scm_address_create.
+  retry_policy: fail_fast
+  scope: tenant
+scm_security_rule_delete:
+  access: write
+  domain: threat_coverage
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_security_rule_get:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_security_rule_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_service_connection_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_service_list:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_service_maintenance:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_snippet_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_spi_status:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_spn_bandwidth:
+  access: read
+  domain: deployment
+  idempotent: true
+  known_failure_modes: Insights v3.0 queries 403 on view-only service accounts.
+  retry_policy: retry
+  scope: cross_tenant
+scm_ssr_execute:
+  access: write
+  domain: config_change
+  idempotent: true
+  known_failure_modes: Only edits objects in the per-tenant SSR allowlist; idempotent (re-adding
+    returns already_present); dry_run=true by default — commit is a separate step.
+  retry_policy: fail_fast
+  scope: tenant
+scm_tag_list:
+  access: read
+  domain: config_change
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_tenant_dashboard:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+scm_tls_profile_manager:
+  access: write
+  domain: threat_coverage
+  idempotent: false
+  retry_policy: fail_fast
+  scope: tenant
+scm_url_category_list:
+  access: read
+  domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_user_count:
+  access: read
+  domain: operational_health
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_zone_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  known_failure_modes: Fails with 'Folder not found' on tenants whose configured default_folder
+    does not exist for them — always pass an explicit folder.
+  retry_policy: retry
+  scope: tenant
+scm_ztna_connector_list:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_app_health:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_audit_logs:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: 403 for current service accounts (RBAC).
+  retry_policy: retry
+  scope: tenant
+sdwan_cellular_status:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_debug_topology:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_events:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: 500s on bare queries — requires the v3.7 payload shape (see SD-WAN
+    depth notes).
+  retry_policy: retry
+  scope: tenant
+sdwan_flows:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_link_health:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_bgp:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_clusters:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_elements:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_path_groups:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_policies:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_sites:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_wan_interfaces:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_list_wan_networks:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_policy_rules:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_site_map:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_software_status:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: Software history endpoint 403s for current service accounts; elements'
+    software_version field is the fallback.
+  retry_policy: retry
+  scope: tenant
+sdwan_topology:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_topology_diagram:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_wan_ip_summary:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
