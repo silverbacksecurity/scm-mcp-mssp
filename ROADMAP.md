@@ -9,6 +9,24 @@ do about it.
 
 ## Recently shipped
 
+- **Compliance Center API tools** (2026-07-15) — `scm_compliance_center` +
+  `scm_compliance_framework` covering all 15 endpoints of PAN's new Compliance
+  Center API (released 2026-07-14): framework CRUD, compliance scores by product
+  + category, 30d/1y timeline, per-control pass/fail with severity, benchmark
+  monitoring. 403 detection returns a licence-hint. 18 tests.
+- **SSR — Simple Service Requests** (2026-07-15) — `scm_ssr_execute`:
+  machine-first JSON tool for URL allow/block-list, threat exceptions, and SSL
+  decrypt exclusions. Idempotent, dry-run default, mandatory ticket_ref,
+  per-tenant `ssr_objects` allowlist. 21 tests.
+- **Insights 2.0 general-purpose query** (2026-07-15) — `scm_insights_query`
+  unlocks all 103 Insights paths (v1/v2/v3 + custom + exports) behind one
+  interface. Auto-resolves CDL region. 13 tests.
+- **MT Monitor round 2** (2026-07-15) — `scm_mt_analytics` gains 5 new views:
+  app-usage, url-logs, upgrades, locations, licenses. GET/POST auto-detection.
+- **CLI UX overhaul** (2026-07-15) — paginated 21-item menus (Config & Inventory
+  5 pages, SD-WAN 3 pages) with N/P nav; 81 read-only ops no longer pause for
+  Enter; confirmation prompts on Commit/Push/Rollback; Posture menu renumbered
+  sequentially; MSSP Ops reorganised with SYSTEM section; "option 9" → "S".
 - **Agentic ops layer: verify / sentinel / gate** (2026-07-15) — three tool
   groups built on one section-diff engine (`audit/asbuilt_verify.py`):
   `scm_asbuilt_verify` (doc-vs-live drift check for AS-BUILT documents
@@ -175,16 +193,14 @@ do about it.
 
 ## Next
 
-_Last pan.dev check: 2026-07-14 — one new spec file since the 2026-07-09
-catalog: **Compliance Center v1** (`scm/config/posture-management/
-compliance-framework/compliance-center-recent-v1.yaml`, 12 paths — see the
-bullet below). Catalog regenerated (`generated_at: 2026-07-14`, 3,883
-endpoints). No other upstream drift; the last content commit to
-`products/sase/api` remains 2026-03-06 (Config Orchestration RNHP docs).
-`pan-scm-sdk` is current (0.15.1 installed = PyPI latest); `prisma-sase`
-and `mcp` also current._
+_Last pan.dev check: 2026-07-16 — no new spec files since 2026-07-14.
+Catalog regenerated (`generated_at: 2026-07-16`, 3,883 endpoints). No other
+upstream drift. `pan-scm-sdk` is current (0.15.1 installed = PyPI latest);
+`prisma-sase` and `mcp` also current.
+**Five Next items shipped 2026-07-15:** Compliance Center, SSR, Insights 2.0,
+Aggregate monitoring round 2, and CLI UX overhaul are now in Recently Shipped._
 
-- **SSR — Simple Service Requests (restricted customer-change CRUD)** — a
+- ✅ **SSR — Simple Service Requests (restricted customer-change CRUD)** — shipped 2026-07-15.  A
   single two-phase tool (working name `scm_ssr_execute`) automating the three
   commonest customer change requests: URL allow/block-listing, threat
   exceptions (include/exclude a threat ID in anti-spyware / vulnerability
@@ -260,12 +276,12 @@ and `mcp` also current._
   (`/mt/notifications/api/cloud/2.0/agg/notifications/*`) but current
   service accounts get 403 Access denied — blocked on an MSP notifications
   role, same class as Insights `tunnel_list`.
-- **Aggregate monitoring round 2** — `scm_mt_analytics` (2026-07-13, see
+- ✅ **Aggregate monitoring round 2** — shipped 2026-07-15.  `scm_mt_analytics` (2026-07-13, see
   Recently shipped) covers apps/threats/connectivity/incidents. Still
   unused: applicationUsage, urlLogs, upgrades/list, location trends, the
   custom license quota/utilization GETs, and the two endpoints that fail
   on their own spec examples (`applications/list`, `locationsUsers`).
-- **Insights 2.0 resource catalog** — `access/insights`, 103 paths across 7
+- ✅ **Insights 2.0 — general-purpose query tool** — shipped 2026-07-15.  `access/insights`, 103 paths across 7
   spec files; only ~5 queries are hardcoded today (connected users v2/v3,
   per-SPN throughput in `scm_spn_bandwidth`). Custom queries, scheduled
   exports, and report downloads are unused.
@@ -275,7 +291,7 @@ and `mcp` also current._
   account for live validation (current accounts get 401 on `/mt/sp-interconnect/*`).
 - **Spec-schema request validation** — validate raw-REST query/body params
   against the OpenAPI schemas before calling (fewer opaque 400s).
-- **Compliance Center API (new upstream 2026-07-14)** — `posture/
+- ✅ **Compliance Center API (new upstream 2026-07-14)** — shipped 2026-07-15.  `posture/
   compliance-frameworks/v1`, 12 paths, **zero tooling**. Framework
   definitions CRUD + clone + benchmark/un-benchmark, plus analytics:
   per-framework compliance scores, score timeline, configurations
