@@ -134,6 +134,63 @@ def _view_queries(view: str, days: int) -> list[tuple[str, str, dict[str, Any]]]
                 },
             )
         ]
+    # ── Round 2 views (2026-07-15) ──────────────────────────────────────────
+    if view == "app-usage":
+        return [
+            (
+                "app_usage",
+                "applicationUsage",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "app_name"},
+                        {"property": "app_category"},
+                        {"property": "risk_level"},
+                        {"property": "user_count"},
+                    ],
+                },
+            ),
+        ]
+    if view == "url-logs":
+        return [
+            (
+                "url_logs",
+                "urlLogs",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "url"},
+                        {"property": "url_category"},
+                        {"property": "action"},
+                        {"property": "count"},
+                    ],
+                },
+            ),
+        ]
+    if view == "upgrades":
+        return [
+            (
+                "upgrades",
+                "upgrades/list",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "device_name"},
+                        {"property": "current_version"},
+                        {"property": "target_version"},
+                        {"property": "status"},
+                    ],
+                },
+            ),
+        ]
+    # GET-based views — no POST query body needed
+    if view == "locations":
+        return [("locations", "location/list", {})]
+    if view == "licenses":
+        return [
+            ("quota", "custom/license/quota", {}),
+            ("utilization", "custom/license/utilization", {}),
+        ]
     return []
 
 
@@ -152,12 +209,19 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
         Queries the MT Monitor aggregation API with `agg_by=tenant`, so a
         parent (MSSP) tenant answers for itself and all child tenants.
 
-        Views:
+        Views (round 1):
         - apps: total / risky / blocked application counts.
         - threats: total and blocked threat counts (Critical/High/Medium).
         - connectivity: site counts by node type and up/down state per
           child tenant.
         - incidents: raised incident counts by severity.
+
+        Views (round 2 — 2026-07-15):
+        - app-usage: per-app usage with category, risk level, user count.
+        - url-logs: URL activity with category, action, count.
+        - upgrades: device upgrade status (current → target version).
+        - locations: user location list (GET — no query body).
+        - licenses: custom license quota + utilization (GET — no query body).
 
         (applications/list and locationsUsers are omitted: both reject or
         500 on the spec's own example payloads — revisit on a spec update.)
@@ -169,7 +233,8 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
 
         Args:
             tenant_id: SCM tenant ID (MSSP parent).
-            view: apps | threats | connectivity | incidents.
+            view: apps | threats | connectivity | incidents | app-usage |
+                url-logs | upgrades | locations | licenses.
             days: Look-back window in days (default 7).
             region: CDL region override (de, americas, europe, uk, sg,
                 ca, jp, au, in).
@@ -180,7 +245,10 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
         try:
             queries = _view_queries(view, days)
             if not queries:
-                return "Error: view must be one of apps, threats, connectivity, incidents"
+                return (
+                    "Error: view must be one of apps, threats, connectivity, "
+                    "incidents, app-usage, url-logs, upgrades, locations, licenses"
+                )
             if region and region not in _CDL_REGIONS:
                 return f"Error: region must be one of {', '.join(_CDL_REGIONS)}"
 
@@ -205,19 +273,30 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
                 sibling = {"europe": ["uk"], "uk": ["europe"]}.get(mapped, [])
                 candidates = [mapped, *sibling]
 
+            # Detect GET vs POST — empty body means GET
+            _GET_VIEWS = {"locations", "licenses"}
+
             result: dict[str, Any] = {"view": view, "window_days": days}
             warnings: list[str] = []
             for cand in candidates:
                 data: dict[str, Any] = {}
                 hits = 0
                 for key, path, body in queries:
-                    resp = session.post(
-                        f"{_BASE}/{path}",
-                        params={"agg_by": "tenant"},
-                        headers={"X-PANW-Region": cand},
-                        json=body,
-                        timeout=(5, 30),
-                    )
+                    if view in _GET_VIEWS or not body:
+                        resp = session.get(
+                            f"{_BASE}/{path}",
+                            params={"agg_by": "tenant"},
+                            headers={"X-PANW-Region": cand},
+                            timeout=(5, 30),
+                        )
+                    else:
+                        resp = session.post(
+                            f"{_BASE}/{path}",
+                            params={"agg_by": "tenant"},
+                            headers={"X-PANW-Region": cand},
+                            json=body,
+                            timeout=(5, 30),
+                        )
                     if resp.status_code != 200:
                         warnings.append(f"{path} [{cand}]: HTTP {resp.status_code}")
                         data[key] = []
