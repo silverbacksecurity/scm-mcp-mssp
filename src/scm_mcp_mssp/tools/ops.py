@@ -409,6 +409,153 @@ def _spec_drift() -> tuple[dict, list[str], list[str], list[str]] | None:
 # ── Tool registration ─────────────────────────────────────────────────────────
 
 
+def _connected_mu_count(client: Any, tsg_id: str, region: str) -> int | None:
+    """Live connected mobile-user count via Insights v3.0; None on any failure."""
+    session = getattr(client, "session", None)
+    if session is None:
+        return None
+    oauth = getattr(client, "oauth_client", None)
+    if oauth is not None:
+        try:
+            if oauth.is_expired or oauth.token_expires_soon:
+                oauth.refresh_token()
+        except Exception:
+            pass
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-PANW-Region": region,
+    }
+    if tsg_id:
+        headers["Prisma-Tenant"] = tsg_id
+    try:
+        resp = session.post(
+            f"{_INSIGHTS_BASE}/users/agent/connected_user_count",
+            json={},
+            headers=headers,
+            timeout=(5, 15),
+        )
+        if resp.status_code != 200:
+            return None
+        items = resp.json().get("data", [])
+        val = items[0].get("user_count") if items else None
+        return int(val) if val is not None else None
+    except Exception:
+        return None
+
+
+# ── Renewal brief helpers (pure — unit-tested without an SCM client) ─────────
+
+
+def _licence_rows(lics: list[dict]) -> list[dict[str, Any]]:
+    """Group licence bundles by (app_id, expiry) into consumption rows.
+
+    Returns rows sorted soonest-expiry-first, each with:
+    app, exp, license_type, purchased, remaining, consumed, days.
+    """
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for bundle in lics:
+        app = bundle.get("app_id", "unknown")
+        for sub in bundle.get("licenses", []):
+            exp = str(sub.get("license_expiration", ""))
+            key = (app, exp)
+            if key not in groups:
+                groups[key] = {
+                    "app": app,
+                    "exp": exp,
+                    "license_type": sub.get("license_type", ""),
+                    "purchased": 0,
+                    "remaining": 0,
+                }
+            groups[key]["purchased"] += int(sub.get("purchased_size", 0) or 0)
+            groups[key]["remaining"] += int(sub.get("remaining_size", 0) or 0)
+
+    rows: list[dict[str, Any]] = []
+    for g in groups.values():
+        g["consumed"] = g["purchased"] - g["remaining"]
+        g["days"] = _parse_expiry_str(g["exp"])
+        rows.append(g)
+    rows.sort(key=lambda r: r["days"] if r["days"] is not None else 99_999)
+    return rows
+
+
+def _consumption_signal(purchased: int, consumed: int, underuse_pct: int = 40) -> str:
+    """Classify seat consumption against contract for renewal conversations."""
+    if purchased <= 0:
+        return "N/A"
+    pct = consumed / purchased * 100
+    if pct > 100:
+        return "OVERSUBSCRIBED"
+    if pct < underuse_pct:
+        return "UNDERUSED"
+    return "HEALTHY"
+
+
+def _renewal_talking_points(
+    rows: list[dict[str, Any]],
+    horizon_days: int,
+    underuse_pct: int,
+    bw_total_mbps: float,
+    bw_locations: int,
+    mu_connected: int | None,
+    mu_seats: int,
+) -> list[str]:
+    """Generate the renewal-conversation bullets from consumption rows.
+
+    Each bullet is one talking point: renewal urgency, true-up (oversubscribed),
+    downsize risk (underused), and live capacity headroom.
+    """
+    points: list[str] = []
+
+    for r in rows:
+        days = r["days"]
+        if days is not None and days < 0:
+            points.append(
+                f"🔴 `{r['app']}` **expired {-days} day(s) ago** "
+                f"({r['exp'][:10]}) — service-impact risk; renew immediately."
+            )
+        elif days is not None and days <= horizon_days:
+            points.append(
+                f"🟡 Renew `{r['app']}` within **{days} day(s)** (expires {r['exp'][:10]})."
+            )
+
+    for r in rows:
+        if (r["days"] is not None and r["days"] < 0) or r["purchased"] <= 0:
+            continue
+        signal = _consumption_signal(r["purchased"], r["consumed"], underuse_pct)
+        pct = r["consumed"] / r["purchased"] * 100
+        if signal == "OVERSUBSCRIBED":
+            points.append(
+                f"📈 `{r['app']}` is consuming **{r['consumed']:,} of {r['purchased']:,}** "
+                f"({pct:.0f}%) — over contract; open a true-up / upsell conversation."
+            )
+        elif signal == "UNDERUSED":
+            points.append(
+                f"📉 `{r['app']}` is at **{pct:.0f}%** of {r['purchased']:,} contracted — "
+                "downsize risk at renewal; confirm rollout plans or right-size the quote."
+            )
+
+    if mu_connected is not None and mu_seats > 0:
+        mu_pct = mu_connected / mu_seats * 100
+        headroom = (
+            "near seat capacity — quote additional seats" if mu_pct >= 80 else "healthy headroom"
+        )
+        points.append(
+            f"👤 **{mu_connected:,}** mobile users connected now against "
+            f"**{mu_seats:,}** licensed seats ({mu_pct:.0f}% — {headroom})."
+        )
+
+    if bw_total_mbps > 0:
+        points.append(
+            f"🌐 **{bw_total_mbps:,.0f} Mbps** allocated across "
+            f"**{bw_locations}** compute location(s)."
+        )
+
+    if not points:
+        points.append(f"🟢 No renewal risks detected within the next {horizon_days} days.")
+    return points
+
+
 def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
     """Register operational visibility and MSSP dashboard tools."""
 
@@ -1139,6 +1286,202 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
 
         if all_ok and targets:
             lines.insert(4, "> 🟢 All licences are within normal thresholds.\n")
+
+        return "\n".join(lines)
+
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def scm_renewal_brief(
+        tenant_id: str = "",
+        all_tenants: bool = False,
+        horizon_days: int = 180,
+        underuse_pct: int = 40,
+    ) -> str:
+        """Generate a renewal-conversation brief: licences vs actual consumption.
+
+        Combines three data sources into one commercial view per tenant:
+        subscription licences (contracted seats, consumption, expiry) from the
+        Subscription Service API, bandwidth allocations per compute location
+        from SCM config, and the live connected mobile-user count from the
+        Insights v3.0 API.
+
+        The brief flags where consumption contradicts the contract — products
+        running OVERSUBSCRIBED (true-up / upsell conversation) or UNDERUSED
+        (downsize risk at renewal) — lists everything expiring within the
+        horizon, and generates ready-to-use talking points for the renewal
+        or QBR conversation.
+
+        Args:
+            tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active
+                       single-tenant client.
+            all_tenants: If True (MSSP mode), produce a combined brief for
+                         every configured tenant. Overrides tenant_id.
+            horizon_days: Renewal window — licences expiring within this many
+                          days are listed and raised as talking points
+                          (default 180).
+            underuse_pct: Consumption below this percentage of contracted
+                          seats is flagged UNDERUSED (default 40).
+
+        Returns:
+            Markdown brief per tenant: renewal window table, consumption vs
+            contract table, capacity snapshot, and talking points.
+        """
+        # label → (tsg_id for the Prisma-Tenant header, Insights region)
+        metas: dict[str, tuple[str, str]] = {}
+        try:
+            targets: list[tuple[str, Any]] = []
+            if all_tenants:
+                for key, tc in _load_all_tenant_configs().items():
+                    label = tc.label or key
+                    metas[label] = (tc.tenant_id, tc.insights_region)
+                    try:
+                        targets.append((label, get_scm_client(tc)))
+                    except Exception as exc:
+                        logger.warning("renewal_brief_auth_failed", tenant=key, error=str(exc))
+                        targets.append((label, None))
+            else:
+                client = get_client(tenant_id)
+                label = tenant_id or "active tenant"
+                own_tc = _load_all_tenant_configs().get(tenant_id)
+                metas[label] = (
+                    own_tc.tenant_id if own_tc is not None else tenant_id,
+                    own_tc.insights_region if own_tc is not None else "eu",
+                )
+                targets = [(label, client)]
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        multi = len(targets) > 1
+        ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        lines: list[str] = [
+            "# Renewal Brief",
+            "",
+            f"**Generated:** {ts}  |  **Horizon:** {horizon_days} days  |  "
+            f"**Underuse threshold:** {underuse_pct}%",
+            "",
+        ]
+
+        def _section(label: str, client: Any) -> list[str]:
+            out: list[str] = [f"## {label}", ""] if multi else []
+            if client is None:
+                out += ["> ⚠️ Authentication failed — skipped.", ""]
+                return out
+
+            tsg_id, region = metas.get(label, ("", "eu"))
+            rows = _licence_rows(fetch_licenses(client))
+            if not rows:
+                out += ["> No licence data returned.", ""]
+                return out
+
+            # Bandwidth allocations (global resource; folder is ignored)
+            try:
+                bw_rows = [
+                    b.model_dump() if hasattr(b, "model_dump") else b
+                    for b in client.bandwidth_allocation.list()
+                ]
+            except Exception as exc:
+                logger.warning("renewal_brief_bw_failed", tenant=label, error=str(exc))
+                bw_rows = []
+            bw_total = sum(float(b.get("allocated_bandwidth") or 0) for b in bw_rows)
+
+            mu_connected = _connected_mu_count(client, tsg_id, region)
+            # Active PAE mobile-user seat pool (same filter as scm_mobile_user_stats)
+            mu_seats = sum(
+                r["purchased"]
+                for r in rows
+                if r["app"] == "prisma_access_edition"
+                and "MU" in str(r["license_type"]).upper()
+                and (r["days"] is None or r["days"] >= 0)
+            )
+
+            # ── Renewal window ────────────────────────────────────────────
+            expiring = [r for r in rows if r["days"] is None or r["days"] <= horizon_days]
+            out.append(f"### Renewal Window (next {horizon_days} days)")
+            out.append("")
+            if expiring:
+                out += [
+                    "| Product | Type | Expires | Days | Status |",
+                    "|---|---|---|---|---|",
+                ]
+                for r in expiring:
+                    st = _status(r["days"], horizon_days)
+                    emoji = _STATUS_EMOJI.get(st, "")
+                    days_s = str(r["days"]) if r["days"] is not None else "?"
+                    out.append(
+                        f"| `{r['app']}` | {r['license_type']} | {r['exp'][:10]} "
+                        f"| {days_s} | {emoji} {st} |"
+                    )
+            else:
+                out.append(f"🟢 Nothing expires within {horizon_days} days.")
+            out.append("")
+
+            # ── Consumption vs contract ───────────────────────────────────
+            seat_rows = [r for r in rows if r["purchased"] > 0]
+            if seat_rows:
+                out.append("### Consumption vs Contract")
+                out.append("")
+                out += [
+                    "| Product | Contracted | Consumed | % Used | Signal |",
+                    "|---|---|---|---|---|",
+                ]
+                _signal_emoji = {
+                    "OVERSUBSCRIBED": "📈",
+                    "UNDERUSED": "📉",
+                    "HEALTHY": "🟢",
+                    "N/A": "⚪",
+                }
+                for r in seat_rows:
+                    signal = _consumption_signal(r["purchased"], r["consumed"], underuse_pct)
+                    pct = r["consumed"] / r["purchased"] * 100
+                    out.append(
+                        f"| `{r['app']}` | {r['purchased']:,} | {r['consumed']:,} "
+                        f"| {pct:.0f}% | {_signal_emoji.get(signal, '')} {signal} |"
+                    )
+                out.append("")
+
+            # ── Capacity snapshot ─────────────────────────────────────────
+            out.append("### Capacity Snapshot")
+            out.append("")
+            if bw_rows:
+                out.append(
+                    f"- Bandwidth: **{bw_total:,.0f} Mbps** allocated across "
+                    f"**{len(bw_rows)}** compute location(s): "
+                    + ", ".join(f"`{b.get('name')}`" for b in bw_rows[:15])
+                    + (" …" if len(bw_rows) > 15 else "")
+                )
+            else:
+                out.append("- Bandwidth: no allocations found (no Remote Networks capacity).")
+            if mu_connected is not None:
+                seats_s = f" of **{mu_seats:,}** licensed seats" if mu_seats else ""
+                out.append(f"- Mobile users connected now: **{mu_connected:,}**{seats_s}.")
+            else:
+                out.append("- Mobile users connected now: unavailable (Insights API).")
+            out.append("")
+
+            # ── Talking points ────────────────────────────────────────────
+            out.append("### Talking Points")
+            out.append("")
+            out += [
+                f"- {p}"
+                for p in _renewal_talking_points(
+                    rows,
+                    horizon_days,
+                    underuse_pct,
+                    bw_total,
+                    len(bw_rows),
+                    mu_connected,
+                    mu_seats,
+                )
+            ]
+            out.append("")
+            return out
+
+        for label, ok, payload in _gather_parallel(targets, _section, timeout=40):
+            if not ok or payload is None:
+                lines += [f"## {label}", "", "> ⏱ Slow/skipped — exceeded poll budget.", ""]
+                continue
+            lines += payload
 
         return "\n".join(lines)
 

@@ -1707,6 +1707,8 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
                 with _JOBS_LOCK:
                     _ASBUILT_JOBS[job_id]["status"] = "done"
                     _ASBUILT_JOBS[job_id]["result"] = report_md
+                    # Kept for scm_asbuilt_verify — doc-vs-live drift checking
+                    _ASBUILT_JOBS[job_id]["snap"] = snap
 
             except Exception as exc:
                 logger.error("asbuilt_job_failed", job_id=job_id, error=str(exc))
@@ -1791,6 +1793,81 @@ def register_audit_tools(mcp: FastMCP, get_client: Any) -> None:
             return f"AS-BUILT report saved to: {save_to}\n\n{report_md}"
 
         return report_md
+
+    # ── AS-BUILT Verification (doc vs live) ───────────────────────────────────
+
+    @mcp.tool()
+    def scm_asbuilt_verify(job_id: str) -> str:
+        """Verify a completed AS-BUILT document against live tenant state.
+
+        Re-extracts a fresh core config snapshot (bypassing the snapshot
+        cache) for the same tenant and folder the document was built from,
+        then diffs it section by section against the snapshot behind the
+        document. Flags every section where the document and the API now
+        disagree — objects added, removed, or modified since generation —
+        plus any extraction gaps that made the document incomplete at
+        generation time.
+
+        Run this after scm_asbuilt_result before handing the document to a
+        customer: a clean verdict means the document still reflects the
+        tenant; a drift verdict lists exactly which sections are stale.
+
+        Only sections fed by the core config extraction are verified.
+        Optional live-data sections (Insights, ADEM, SD-WAN) are not
+        re-checked — they are operational metrics expected to change.
+
+        Args:
+            job_id: Job ID of a completed scm_asbuilt_report job (jobs are
+                    kept for 1 hour after completion).
+
+        Returns:
+            Markdown verification report with a per-section match/drift
+            table, drift detail, and a refresh recommendation if needed.
+        """
+        from ..audit.asbuilt_verify import diff_snapshots, render_verification_report
+
+        with _JOBS_LOCK:
+            job = dict(_ASBUILT_JOBS.get(job_id, {}))
+
+        if not job:
+            active = list(_ASBUILT_JOBS.keys())
+            hint = f"  Active jobs: {active}" if active else "  No active jobs."
+            return f"Job `{job_id}` not found (expires after 1 hour).\n{hint}"
+        if job["status"] == "running":
+            return f"Job `{job_id}` is still running — verify after scm_asbuilt_result succeeds."
+        if job["status"] == "error":
+            return f"Job `{job_id}` failed — nothing to verify: {job['error']}"
+
+        doc_snap = job.get("snap")
+        if doc_snap is None:
+            return (
+                f"Job `{job_id}` has no stored snapshot (generated before verification "
+                "support was added). Re-run scm_asbuilt_report to enable verification."
+            )
+
+        try:
+            tenant_id = job.get("tenant_id", "")
+            folder = job.get("folder", "Prisma Access")
+            client = get_client(tenant_id)
+            live_snap = extract_snapshot(client, folder, tenant_id or "default", fresh=True)
+
+            diffs = diff_snapshots(doc_snap, live_snap)
+            doc_generated = datetime.fromtimestamp(job["started_at"], tz=UTC).strftime(
+                "%Y-%m-%d %H:%M UTC"
+            )
+            verified_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+            drift_count = sum(1 for d in diffs if d.drifted)
+            logger.info(
+                "asbuilt_verify_complete",
+                job_id=job_id,
+                sections=len(diffs),
+                drifted=drift_count,
+            )
+            return render_verification_report(
+                diffs, doc_snap, live_snap, job_id, doc_generated, verified_at
+            )
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc, tool='scm_asbuilt_verify')}"
 
     # ── Config Diff ───────────────────────────────────────────────────────────
 

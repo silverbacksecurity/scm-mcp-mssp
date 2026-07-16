@@ -127,7 +127,9 @@ _snapshot_cache: dict[tuple[str, str, int], tuple[float, AuditSnapshot]] = {}
 _snapshot_cache_lock = threading.Lock()
 
 
-def extract_snapshot(client: Any, folder: str, tenant_id: str) -> AuditSnapshot:
+def extract_snapshot(
+    client: Any, folder: str, tenant_id: str, fresh: bool = False
+) -> AuditSnapshot:
     """
     Pull all auditable SCM config for a folder into an AuditSnapshot.
 
@@ -137,13 +139,18 @@ def extract_snapshot(client: Any, folder: str, tenant_id: str) -> AuditSnapshot:
     report) each pull a snapshot for the same (tenant, folder); a short-TTL
     cache lets a back-to-back compliance sweep reuse one extraction instead of
     repeating the full API fan-out per tool.
+
+    fresh=True skips the cache read (the result still refreshes the cache) —
+    required by callers that compare against an earlier snapshot, where a
+    cache hit would diff a snapshot with itself.
     """
     cache_key = (tenant_id, folder, id(client))
     now = time.monotonic()
-    with _snapshot_cache_lock:
-        cached = _snapshot_cache.get(cache_key)
-        if cached is not None and now - cached[0] < _SNAPSHOT_CACHE_TTL:
-            return cached[1]
+    if not fresh:
+        with _snapshot_cache_lock:
+            cached = _snapshot_cache.get(cache_key)
+            if cached is not None and now - cached[0] < _SNAPSHOT_CACHE_TTL:
+                return cached[1]
 
     snap = _extract_snapshot_uncached(client, folder, tenant_id)
 
