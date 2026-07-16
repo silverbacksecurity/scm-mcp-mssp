@@ -44,6 +44,9 @@ EXPECTED_WRITE_TOOLS = {
     "scm_restart",
     "scm_ssr_execute",
     "scm_adnsr_profile_create",
+    # Phase 3b: the conversational planner run can orchestrate approved
+    # writes, so invoking it is itself a gated write action.
+    "scm_planner_run",
 }
 
 

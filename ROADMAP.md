@@ -411,7 +411,15 @@ in .secrets.toml (same credential as scm_ai_compliance_advisor).
   agent must autonomously surface a finding of the class "NFR licences
   expiring within 90 days across multiple tenants" and "licensed-but-unused
   tenant shell".
-- [ ] **3b. Conversational copilot.** Slack/Teams frontend posting NLQ
+- [x] **3b. Conversational copilot.** ✅ shipped 2026-07-15 as MCP tools —
+  `scm_planner_run` (NLQ goal → the same PlannerLoop with Claude as the
+  reasoning engine; write tools execute ONLY when named in
+  approved_write_tools, the per-run explicit human approval),
+  `scm_planner_status` (progress polling / run list), `scm_planner_result`
+  (final synthesis). Any chat client on this server — Claude Desktop over
+  stdio, Copilot Studio over the Streamable transport — is the frontend;
+  a dedicated Slack/Teams bolt bridge posting NLQs into the same tools
+  needs workspace credentials and remains open. Original spec: Slack/Teams frontend posting NLQ
   triggers into the same Planner loop; responses stream plan progress and
   final synthesis.
 - [ ] **3c. IR-triggered agent (last).** Webhook from MT Monitor alerts /

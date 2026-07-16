@@ -6,7 +6,7 @@
 #
 # Regenerate/verify coverage: tests/unit/test_planner_manifest.py fails
 # whenever a registered tool lacks an entry here (or vice versa).
-# Tools: 135 | write: 21 | domains: 11
+# Tools: 139 | write: 22 | domains: 11
 
 dlp_backup:
   access: read
@@ -427,6 +427,16 @@ scm_incident_summary:
   idempotent: true
   retry_policy: retry
   scope: cross_tenant
+scm_insights_query:
+  access: read
+  domain: operational_health
+  scope: tenant
+  idempotent: true
+  retry_policy: retry
+  known_failure_modes: 'Generic Insights v1/v2/v3 query surface - several resources
+    (e.g. tunnels/tunnel_list, auditlog) 403 on view-only service accounts; data may
+    live in a different CDL region than the tenant''s insights_region claims. Body must
+    match the resource''s expected query schema or the API 400s.'
 scm_ipsec_tunnel_list:
   access: read
   domain: deployment
@@ -564,6 +574,29 @@ scm_pab_user_requests:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_planner_result:
+  access: read
+  domain: operational_health
+  scope: cross_tenant
+  idempotent: true
+  retry_policy: retry
+scm_planner_run:
+  access: write
+  domain: operational_health
+  scope: cross_tenant
+  idempotent: false
+  retry_policy: fail_fast
+  known_failure_modes: 'Orchestrates other tools via the Planner loop; write steps inside
+    the run are additionally gated on the approved_write_tools list (explicit per-run
+    human approval). Requires anthropic_api_key in .secrets.toml; without it the run
+    completes as FAILED with a partial report. Runs in the background - poll
+    scm_planner_status.'
+scm_planner_status:
+  access: read
+  domain: operational_health
+  scope: cross_tenant
+  idempotent: true
+  retry_policy: retry
 scm_posture_report:
   access: read
   domain: posture_compliance
