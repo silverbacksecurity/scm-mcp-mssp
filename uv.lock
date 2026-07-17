@@ -1492,6 +1492,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "dynaconf" },
+    { name = "jsonschema" },
     { name = "markdown" },
     { name = "mcp" },
     { name = "pan-scm-sdk" },
@@ -1523,6 +1524,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.113.0" },
     { name = "dynaconf", specifier = ">=3.2.13" },
+    { name = "jsonschema", specifier = ">=4.20" },
     { name = "markdown", specifier = ">=3.10.2" },
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "pan-scm-sdk", specifier = ">=0.15.1" },

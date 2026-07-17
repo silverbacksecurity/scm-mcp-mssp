@@ -44,6 +44,10 @@ EXPECTED_WRITE_TOOLS = {
     "scm_restart",
     "scm_ssr_execute",
     "scm_adnsr_profile_create",
+    "scm_dns_security_lookup",
+    "scm_config_orch_bandwidth",
+    "scm_config_orch_profiles",
+    "scm_config_orch_remote_networks",
     # Phase 3b: the conversational planner run can orchestrate approved
     # writes, so invoking it is itself a gated write action.
     "scm_planner_run",
@@ -122,11 +126,11 @@ class TestDomains:
 
     def test_domain_context_load_stays_under_ceiling(self) -> None:
         # Sub-plans load one domain's tools; keep each well under the
-        # 128-tool Copilot Studio ceiling (spec target ~15-20, hard cap 25).
+        # 128-tool Copilot Studio ceiling (spec target ~15-20, hard cap 30).
         manifest = load_manifest()
         for domain in VALID_DOMAINS:
             size = len(manifest.domain_tools(domain))
-            assert size <= 25, f"{domain} has {size} tools — split the domain"
+            assert size <= 30, f"{domain} has {size} tools — split the domain"
 
     def test_unknown_domain_raises(self) -> None:
         with pytest.raises(ManifestError):

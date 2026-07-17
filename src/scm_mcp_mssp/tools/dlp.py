@@ -525,3 +525,158 @@ def register_dlp_tools(mcp: FastMCP, get_client: Any) -> None:
             lines.append(f"- {item}")
 
         return "\n".join(lines)
+
+    # ── Incidents (v4 Beta API + v1 GA) ──────────────────────────────────────
+
+    @mcp.tool()
+    def dlp_incidents_list(
+        tenant_id: str = "",
+        status: str = "",
+        severity: str = "",
+        limit: int = 50,
+    ) -> str:
+        """List Enterprise DLP incidents from the v4 Beta Incidents API.
+
+        Queries GET /v4/api/incidents on api.dlp.paloaltonetworks.com.
+        The DLP Incidents API surfaces policy violations detected by
+        Enterprise DLP — distinct from the Email DLP incidents API.
+
+        Args:
+            tenant_id:  SCM tenant ID (MSSP mode). Omit for default tenant.
+            status:     Filter by incident status (e.g. "open", "resolved").
+            severity:   Filter by severity (e.g. "critical", "high", "medium", "low").
+            limit:      Max incidents to return (default 50, max 200).
+
+        Returns:
+            JSON: list of DLP incidents with total count.
+        """
+        try:
+            client = get_client(tenant_id)
+            session = client.session
+            params: dict[str, Any] = {"limit": min(limit, 200)}
+            if status:
+                params["status"] = status
+            if severity:
+                params["severity"] = severity
+
+            resp = session.get(
+                f"{_DLP_BASE}/v4/api/incidents",
+                params=params,
+                timeout=(5, 15),
+            )
+            if resp.status_code in _NOT_LICENSED_STATUSES:
+                return json.dumps(
+                    {
+                        "incidents": [],
+                        "total": 0,
+                        "hint": (
+                            "Enterprise DLP Incidents API returned "
+                            f"{resp.status_code} — the tenant may not have "
+                            "Enterprise DLP licensed, or the v4 Beta API is "
+                            "not enabled for this account."
+                        ),
+                    },
+                    indent=2,
+                    default=str,
+                )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        items = data if isinstance(data, list) else data.get("items", data.get("data", []))
+        return json.dumps(
+            {
+                "incidents": items,
+                "total": len(items),
+                "filters": {
+                    "status": status or "all",
+                    "severity": severity or "all",
+                    "limit": limit,
+                },
+            },
+            indent=2,
+            default=str,
+        )
+
+    @mcp.tool()
+    def dlp_incidents_get(
+        tenant_id: str = "",
+        incident_id: str = "",
+    ) -> str:
+        """Get a single Enterprise DLP incident by ID.
+
+        Queries GET /v4/api/incidents/{id} on api.dlp.paloaltonetworks.com.
+
+        Args:
+            tenant_id:   SCM tenant ID (MSSP mode). Omit for default tenant.
+            incident_id: DLP incident ID (required).
+
+        Returns:
+            JSON: incident detail.
+        """
+        if not incident_id:
+            return json.dumps({"error": "incident_id is required"}, indent=2)
+
+        try:
+            client = get_client(tenant_id)
+            session = client.session
+            resp = session.get(
+                f"{_DLP_BASE}/v4/api/incidents/{incident_id}",
+                timeout=(5, 15),
+            )
+            if resp.status_code in _NOT_LICENSED_STATUSES:
+                return json.dumps(
+                    {
+                        "incident_id": incident_id,
+                        "available": False,
+                        "hint": f"DLP Incidents API returned {resp.status_code}.",
+                    },
+                    indent=2,
+                    default=str,
+                )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        return json.dumps({"incident_id": incident_id, "incident": data}, indent=2, default=str)
+
+    @mcp.tool()
+    def dlp_incidents_assignees(
+        tenant_id: str = "",
+    ) -> str:
+        """List DLP incident assignees from the v1 GA Incidents API.
+
+        Queries GET /v1/api/incidents/assignee on api.dlp.paloaltonetworks.com.
+        Returns the list of users/groups that can be assigned to DLP incidents.
+
+        Args:
+            tenant_id:  SCM tenant ID (MSSP mode). Omit for default tenant.
+
+        Returns:
+            JSON: list of assignees.
+        """
+        try:
+            client = get_client(tenant_id)
+            session = client.session
+            resp = session.get(
+                f"{_DLP_BASE}/v1/api/incidents/assignee",
+                timeout=(5, 15),
+            )
+            if resp.status_code in _NOT_LICENSED_STATUSES:
+                return json.dumps(
+                    {
+                        "assignees": [],
+                        "hint": f"DLP Incidents API returned {resp.status_code}.",
+                    },
+                    indent=2,
+                    default=str,
+                )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            return f"Error: {handle_scm_exception(exc)}"
+
+        items = data if isinstance(data, list) else data.get("items", data.get("data", []))
+        return json.dumps({"assignees": items, "total": len(items)}, indent=2, default=str)

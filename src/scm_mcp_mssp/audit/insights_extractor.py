@@ -180,37 +180,51 @@ def extract_insights(
         logger.warning("insights_mu_count_error", status=status)
 
     # ── Location-based resource: one helper for each endpoint ─────────────────
-    _location_endpoints: list[tuple[str, str, str]] = [
-        # (snap_field, url_path, log_key)
+    # The bandwidth resources reject an empty body with HTTP 400 GCP10002
+    # ("Syntax error: Unexpected keyword AND" — the backend inlines the time
+    # predicate into a SQL template), so they need an explicit event_time
+    # window. The status resources accept an empty body, so they keep it.
+    # The window is the shared Insights default (24h) so the AS-BUILT and
+    # scm_insights_query always assume the same timeframe.
+    from ..tools.insights import default_time_window
+
+    _bw_query = default_time_window()
+    _location_endpoints: list[tuple[str, str, str, dict | None]] = [
+        # (snap_field, url_path, log_key, query_body)
         (
             "location_rn_status",
             "/insights/v3.0/resource/query/locations/location_rn_status",
             "rn_status",
+            None,
         ),
         (
             "location_sc_status",
             "/insights/v3.0/resource/query/locations/location_sc_status",
             "sc_status",
+            None,
         ),
         (
             "location_mu_status",
             "/insights/v3.0/resource/query/locations/location_mu_status",
             "mu_status",
+            None,
         ),
         (
             "location_rn_bandwidth",
             "/insights/v3.0/resource/query/locations/location_rn_bandwidth",
             "rn_bw",
+            _bw_query,
         ),
         (
             "location_sc_bandwidth",
             "/insights/v3.0/resource/query/locations/location_sc_bandwidth",
             "sc_bw",
+            _bw_query,
         ),
     ]
 
-    for attr, path, log_key in _location_endpoints:
-        status, body = _post(path)
+    for attr, path, log_key, query_body in _location_endpoints:
+        status, body = _post(path, query_body)
         if status == 200:
             items = _items(body)
             setattr(data, attr, items)

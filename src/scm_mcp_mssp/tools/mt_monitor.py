@@ -191,6 +191,255 @@ def _view_queries(view: str, days: int) -> list[tuple[str, str, dict[str, Any]]]
             ("quota", "custom/license/quota", {}),
             ("utilization", "custom/license/utilization", {}),
         ]
+    # ── Round 3 views (2026-07-17) ──────────────────────────────────────────
+    if view == "alerts":
+        return [
+            (
+                "alerts",
+                "alerts",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "alert_id"},
+                        {"property": "alert_type"},
+                        {"property": "severity"},
+                        {"property": "status"},
+                        {"property": "tenant_name"},
+                        {"property": "raised_time"},
+                    ],
+                },
+            ),
+        ]
+    if view == "threat-list":
+        return [
+            (
+                "threats",
+                "threats/list",
+                {
+                    "filter": {
+                        "operator": "AND",
+                        "rules": [
+                            {
+                                "operator": "in",
+                                "property": "severity",
+                                "values": ["Critical", "High", "Medium"],
+                            },
+                            _days_filter(days),
+                        ],
+                    },
+                    "properties": [
+                        {"property": "threat_name"},
+                        {"property": "severity"},
+                        {"property": "category"},
+                        {"property": "count"},
+                        {"property": "tenant_name"},
+                    ],
+                },
+            ),
+        ]
+    if view == "threat-source":
+        return [
+            (
+                "sources",
+                "threats/source",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "source_ip"},
+                        {"property": "source_country"},
+                        {"property": "threat_count"},
+                    ],
+                },
+            ),
+        ]
+    if view == "app-source":
+        return [
+            (
+                "sources",
+                "applications/source",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "source_ip"},
+                        {"property": "app_name"},
+                        {"property": "count"},
+                    ],
+                },
+            ),
+        ]
+    if view == "incident-list":
+        return [
+            (
+                "incidents",
+                "incidents/list",
+                {
+                    "filter": {
+                        "operator": "AND",
+                        "rules": [
+                            _days_filter(days, prop="raised_time"),
+                        ],
+                    },
+                    "properties": [
+                        {"property": "incident_id"},
+                        {"property": "severity"},
+                        {"property": "status"},
+                        {"property": "domain"},
+                        {"property": "tenant_name"},
+                        {"property": "raised_time"},
+                    ],
+                },
+            ),
+        ]
+    if view == "incident-trends":
+        return [
+            (
+                "trends",
+                "incidents/trends",
+                {
+                    "filter": {
+                        "operator": "AND",
+                        "rules": [
+                            _days_filter(days, prop="raised_time"),
+                        ],
+                    },
+                    "properties": [
+                        {"property": "raised_time"},
+                        {"property": "severity"},
+                        {"function": "count", "property": "incident_id"},
+                    ],
+                },
+            ),
+        ]
+    if view == "incident-tenants":
+        return [
+            (
+                "tenant_counts",
+                "incidents/tenants",
+                {
+                    "filter": {
+                        "operator": "AND",
+                        "rules": [_days_filter(days, prop="raised_time")],
+                    },
+                    "properties": [
+                        {"property": "tenant_name"},
+                        {"function": "count", "property": "incident_id"},
+                    ],
+                },
+            ),
+        ]
+    if view == "incident-impacted":
+        return [
+            (
+                "impacted",
+                "incidents/impactedList",
+                {
+                    "filter": {
+                        "operator": "AND",
+                        "rules": [_days_filter(days, prop="raised_time")],
+                    },
+                    "properties": [
+                        {"property": "incident_id"},
+                        {"property": "impacted_resource"},
+                        {"property": "impact_type"},
+                    ],
+                },
+            ),
+        ]
+    if view == "service-health":
+        return [
+            (
+                "cdl_status",
+                "serviceConnectivity/cdlStatus",
+                {
+                    "filter": {"rules": []},
+                    "properties": [
+                        {"property": "tenant_name"},
+                        {"property": "cdl_status"},
+                        {"property": "last_seen"},
+                    ],
+                },
+            ),
+            (
+                "gateway_status",
+                "serviceConnectivity/gatewayStatus",
+                {
+                    "filter": {"rules": []},
+                    "properties": [
+                        {"property": "tenant_name"},
+                        {"property": "gateway_name"},
+                        {"property": "status"},
+                        {"property": "tunnel_count"},
+                    ],
+                },
+            ),
+            (
+                "top_outliers",
+                "serviceConnectivity/topOutliers",
+                {
+                    "filter": {"rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "tenant_name"},
+                        {"property": "site_name"},
+                        {"property": "metric"},
+                        {"property": "value"},
+                    ],
+                },
+            ),
+            (
+                "unique_users",
+                "serviceConnectivity/uniqueUsers",
+                {
+                    "filter": {"rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "tenant_name"},
+                        {"property": "user_count"},
+                    ],
+                },
+            ),
+        ]
+    if view == "url-summary":
+        return [
+            (
+                "url_summary",
+                "url/summary",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "url_category"},
+                        {"property": "action"},
+                        {"property": "count"},
+                    ],
+                },
+            ),
+        ]
+    if view == "locations-tenants":
+        return [
+            (
+                "locations_tenants",
+                "locationsTenants",
+                {
+                    "filter": {"operator": "AND", "rules": [_days_filter(days)]},
+                    "properties": [
+                        {"property": "tenant_name"},
+                        {"property": "user_count"},
+                        {"property": "country"},
+                    ],
+                },
+            ),
+        ]
+    # GET-based views (no POST query body)
+    if view == "tenant-hierarchy":
+        return [("hierarchy", "custom/tenant/hierarchy", {})]
+    if view == "license-setup":
+        return [("setup_status", "custom/license/setup/status", {})]
+    if view == "license-allocated":
+        return [("allocated", "serviceConnectivity/licenseAllocated", {})]
+    if view == "app-monitor":
+        return [
+            ("applications", "custom/appMonitor/applications", {}),
+            ("node_trends", "custom/appMonitor/nodeTrend", {}),
+            ("tenants", "custom/appMonitor/tenants", {}),
+        ]
     return []
 
 
@@ -223,6 +472,23 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
         - locations: user location list (GET — no query body).
         - licenses: custom license quota + utilization (GET — no query body).
 
+        Views (round 3 — 2026-07-17):
+        - alerts: alert feed with type, severity, status, tenant.
+        - threat-list: per-threat detail with category and count.
+        - threat-source: source IP/country breakdown for threats.
+        - app-source: source IP breakdown per application.
+        - incident-list: incident detail list with severity, status, domain.
+        - incident-trends: incident count trends over time.
+        - incident-tenants: incident count per tenant.
+        - incident-impacted: impacted resources per incident.
+        - service-health: CDL status, gateway status, top outliers, unique users.
+        - url-summary: URL activity by category and action.
+        - locations-tenants: user counts per tenant by country.
+        - tenant-hierarchy: MSP tenant hierarchy tree (GET).
+        - license-setup: license setup status (GET).
+        - license-allocated: service connectivity license allocated (GET).
+        - app-monitor: custom app monitor applications, node trends, tenants (GET).
+
         (applications/list and locationsUsers are omitted: both reject or
         500 on the spec's own example payloads — revisit on a spec update.)
 
@@ -247,7 +513,11 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
             if not queries:
                 return (
                     "Error: view must be one of apps, threats, connectivity, "
-                    "incidents, app-usage, url-logs, upgrades, locations, licenses"
+                    "incidents, app-usage, url-logs, upgrades, locations, licenses, "
+                    "alerts, threat-list, threat-source, app-source, incident-list, "
+                    "incident-trends, incident-tenants, incident-impacted, "
+                    "service-health, url-summary, locations-tenants, tenant-hierarchy, "
+                    "license-setup, license-allocated, app-monitor"
                 )
             if region and region not in _CDL_REGIONS:
                 return f"Error: region must be one of {', '.join(_CDL_REGIONS)}"
@@ -274,7 +544,14 @@ def register_mt_monitor_tools(mcp: FastMCP, get_client: Any) -> None:
                 candidates = [mapped, *sibling]
 
             # Detect GET vs POST — empty body means GET
-            _GET_VIEWS = {"locations", "licenses"}
+            _GET_VIEWS = {
+                "locations",
+                "licenses",
+                "tenant-hierarchy",
+                "license-setup",
+                "license-allocated",
+                "app-monitor",
+            }
 
             result: dict[str, Any] = {"view": view, "window_days": days}
             warnings: list[str] = []

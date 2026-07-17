@@ -1922,3 +1922,638 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
             return _fmt(result)
         except Exception as exc:
             return f"Error: {exc}"
+
+    # ── SD-WAN Depth Round 3 ───────────────────────────────────────────────
+
+    @mcp.tool()
+    def sdwan_app_qos(
+        tenant_id: str = "",
+        application_name: str = "",
+        metric: str = "",
+        hours: int = 24,
+    ) -> str:
+        """Application QoS aggregates — per-app latency, jitter, loss, MOS.
+
+        Queries the SD-WAN monitor API for application-level QoS metrics.
+        When ``application_name`` is set, scopes to one application; otherwise
+        returns aggregate data across all applications.
+
+        Uses the monitor/v2.0 application/qos aggregate endpoint.  Metric names
+        are API-defined (e.g. ``LatencyMs``, ``JitterMs``, ``PacketLossPct``,
+        ``MOS``) — pass ``metric`` to scope to one, or omit for all.
+
+        Args:
+            tenant_id:        TSG ID or settings key. Omit for default tenant.
+            application_name: Scope to one application (optional).
+            metric:           Scope to one metric name (optional).
+            hours:            Time window in hours (default 24).
+
+        Returns:
+            JSON: per-application QoS aggregates with site/element context.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            start, end = _window(hours)
+            payload: dict[str, Any] = {
+                "time_range": {"start": start, "end": end},
+            }
+            if application_name:
+                payload["application_name"] = application_name
+            if metric:
+                payload["metric"] = metric
+
+            # Try SDK method; fall back to raw REST
+            try:
+                resp = sdk.post.monitor_aggregates_application_qos(payload)
+                items = safe_items(resp)
+            except (AttributeError, TypeError):
+                try:
+                    resp = sdk._session.post(
+                        f"{sdk.base_url}/sdwan/monitor/v2.0/api/monitor/aggregates/application/qos",
+                        json=payload,
+                        timeout=(10, 30),
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    items = data.get("items", [])
+                except Exception as exc2:
+                    return _fmt(
+                        {
+                            "error": "qos_aggregates_failed",
+                            "detail": str(exc2)[:300],
+                            "hint": "QoS aggregate API may require a different service-account role.",
+                        }
+                    )
+        except Exception as exc:
+            return f"Error: {exc}"
+
+        site_names, elem_names = _name_maps(sdk)
+
+        enriched: list[dict[str, Any]] = []
+        for item in items:
+            enriched.append(
+                {
+                    "application": item.get("application_name", item.get("application", "?")),
+                    "site": site_names.get(item.get("site_id", ""), item.get("site_id")),
+                    "element": elem_names.get(item.get("element_id", ""), item.get("element_id")),
+                    "metrics": {
+                        k: v
+                        for k, v in item.items()
+                        if k not in ("application_name", "application", "site_id", "element_id")
+                    },
+                }
+            )
+
+        return _fmt(
+            {
+                "total": len(enriched),
+                "time_window_hours": hours,
+                "metric_filter": metric or "all",
+                "app_filter": application_name or "all",
+                "aggregates": enriched,
+            }
+        )
+
+    @mcp.tool()
+    def sdwan_interface_status(
+        tenant_id: str = "",
+        site_id: str = "",
+        element_id: str = "",
+        interface_id: str = "",
+    ) -> str:
+        """Interface operational status sweep for SD-WAN elements.
+
+        Queries interface status across all elements (or scoped by site/element).
+        Returns port state, speed, duplex, and authentication status for each
+        interface.  Uses the ``interfaces/status/query`` and ``interfaces/query``
+        endpoints (v2.0/v4.20).
+
+        Args:
+            tenant_id:    TSG ID or settings key. Omit for default tenant.
+            site_id:      Scope to one site (optional).
+            element_id:   Scope to one element (optional).
+            interface_id: Fetch a single interface's detailed status (optional).
+
+        Returns:
+            JSON: interface status list with port operational state.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            site_names, elem_names = _name_maps(sdk)
+
+            payload: dict[str, Any] = {}
+            if site_id:
+                payload["site_id"] = site_id
+            if element_id:
+                payload["element_id"] = element_id
+            if interface_id:
+                payload["interface_id"] = interface_id
+
+            warnings: list[str] = []
+            items: list[dict[str, Any]] = []
+
+            # Try v4.20 interfaces/query first
+            for version, path in [
+                ("v4.20", "/sdwan/v4.20/api/interfaces/query"),
+                ("v2.0", "/sdwan/v2.0/api/interfaces/status/query"),
+            ]:
+                try:
+                    resp = sdk._session.post(
+                        f"{sdk.base_url}{path}",
+                        json=payload,
+                        timeout=(10, 30),
+                    )
+                    if resp.status_code == 403:
+                        warnings.append(_api_error(f"interfaces/query {version}", resp))
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    items = data.get("items", [])
+                    if items:
+                        break
+                except Exception:
+                    continue
+
+            # Fallback: list interfaces via GET per element
+            if not items and not interface_id and element_id:
+                try:
+                    resp = sdk.get.elements()
+                    elements = safe_items(resp)
+                    target = [e for e in elements if e.get("id") == element_id] or elements[:1]
+                    for elem in target:
+                        try:
+                            if_resp = sdk._session.get(
+                                f"{sdk.base_url}/sdwan/v4.20/api/sites/{elem.get('site_id')}/"
+                                f"elements/{elem['id']}/interfaces",
+                                timeout=(10, 20),
+                            )
+                            if if_resp.status_code == 200:
+                                items = if_resp.json().get("items", [])
+                                break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+        except Exception as exc:
+            return f"Error: {exc}"
+
+        enriched: list[dict[str, Any]] = []
+        for iface in items:
+            enriched.append(
+                {
+                    "interface_id": iface.get("id"),
+                    "name": iface.get("name"),
+                    "element": elem_names.get(iface.get("element_id", ""), iface.get("element_id")),
+                    "site": site_names.get(iface.get("site_id", ""), iface.get("site_id")),
+                    "type": iface.get("type"),
+                    "admin_state": iface.get("admin_up"),
+                    "oper_state": iface.get("operational_status", iface.get("link_state")),
+                    "speed_mbps": iface.get("speed"),
+                    "duplex": iface.get("duplex"),
+                    "mtu": iface.get("mtu"),
+                    "mac": iface.get("mac_address"),
+                }
+            )
+
+        result: dict[str, Any] = {"total": len(enriched), "interfaces": enriched}
+        if warnings:
+            result["warnings"] = warnings
+        return _fmt(result)
+
+    @mcp.tool()
+    def sdwan_ipfix_config(
+        tenant_id: str = "",
+        resource: str = "profiles",
+        action: str = "list",
+        resource_id: str = "",
+        site_id: str = "",
+        element_id: str = "",
+    ) -> str:
+        """Read IPFIX configuration (profiles, collector/filter contexts, templates, prefixes).
+
+        Lists IPFIX configuration resources for a tenant.  Read-only by default.
+        Create/update/delete operations are gated behind the Planner write-approval
+        check and require ``action`` to be explicitly set.
+
+        Resource types: ``profiles``, ``collector_contexts``, ``filter_contexts``,
+        ``templates``, ``global_prefixes``, ``local_prefixes``, ``element_ipfix``.
+
+        Args:
+            tenant_id:   TSG ID or settings key. Omit for default tenant.
+            resource:    IPFIX resource type (default: profiles).
+            action:      ``list`` (default) or ``get`` with resource_id.
+            resource_id: Fetch a single resource by ID (optional).
+            site_id:     Required when resource is element_ipfix.
+            element_id:  Required when resource is element_ipfix.
+
+        Returns:
+            JSON: IPFIX configuration summary.
+        """
+        _VALID_IPFIX = {
+            "profiles": "ipfixprofiles",
+            "collector_contexts": "ipfixcollectorcontexts",
+            "filter_contexts": "ipfixfiltercontexts",
+            "templates": "ipfixtemplates",
+            "global_prefixes": "ipfixglobalprefixes",
+            "local_prefixes": "ipfixlocalprefixes",
+            "element_ipfix": None,  # handled separately
+        }
+        if resource not in _VALID_IPFIX:
+            return _fmt(
+                {
+                    "error": f"Unknown resource: {resource!r}. "
+                    f"Use one of: {', '.join(_VALID_IPFIX)}"
+                }
+            )
+
+        try:
+            sdk = _sdwan(tenant_id)
+
+            # Per-element IPFIX
+            if resource == "element_ipfix":
+                if not site_id or not element_id:
+                    return _fmt(
+                        {
+                            "error": "site_id and element_id are required for resource='element_ipfix'"
+                        }
+                    )
+                try:
+                    resp = sdk._session.get(
+                        f"{sdk.base_url}/sdwan/v2.0/api/sites/{site_id}/elements/{element_id}/ipfix",
+                        timeout=(10, 20),
+                    )
+                    if resp.status_code == 403:
+                        return _fmt(
+                            {
+                                "resource": resource,
+                                "available": False,
+                                "hint": _api_error("element_ipfix", resp),
+                            }
+                        )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    items = data.get("items", [])
+                except Exception as exc:
+                    return f"Error: {exc}"
+
+                return _fmt(
+                    {
+                        "resource": resource,
+                        "site_id": site_id,
+                        "element_id": element_id,
+                        "total": len(items),
+                        "configs": items,
+                    }
+                )
+
+            # Collection resources
+            endpoint = _VALID_IPFIX[resource]
+            sdk_method = getattr(sdk.get, endpoint, None)
+            if sdk_method:
+                resp = sdk_method()
+                items = safe_items(resp)
+            else:
+                resp = sdk._session.get(
+                    f"{sdk.base_url}/sdwan/v2.0/api/{endpoint}",
+                    timeout=(10, 20),
+                )
+                resp.raise_for_status()
+                items = resp.json().get("items", [])
+
+            # Detail fetch
+            if resource_id and action == "get":
+                item = next((i for i in items if i.get("id") == resource_id), None)
+                if item is None:
+                    return _fmt({"error": f"Resource {resource_id!r} not found in {resource}"})
+                return _fmt({"resource": resource, "resource_id": resource_id, "config": item})
+
+        except Exception as exc:
+            return f"Error: {exc}"
+
+        return _fmt(
+            {
+                "resource": resource,
+                "total": len(items),
+                "configs": items,
+            }
+        )
+
+    @mcp.tool()
+    def sdwan_snmp_config(
+        tenant_id: str = "",
+        element_id: str = "",
+        site_id: str = "",
+        resource: str = "agents",
+    ) -> str:
+        """Read SNMP configuration (agents and trap destinations) per element.
+
+        Lists SNMP agent config (community strings, listeners) and trap
+        destinations for SD-WAN elements.  Write operations are deferred
+        behind the Planner write-approval gate.
+
+        Args:
+            tenant_id:  TSG ID or settings key. Omit for default tenant.
+            element_id: Element ID (optional — lists all if omitted).
+            site_id:    Site ID (optional — scopes element lookup).
+            resource:   ``agents`` (default) or ``traps``.
+
+        Returns:
+            JSON: SNMP configuration summary.
+        """
+        if resource not in ("agents", "traps"):
+            return _fmt({"error": f"Unknown resource: {resource!r}. Use 'agents' or 'traps'."})
+
+        endpoint = "snmpagents" if resource == "agents" else "snmptraps"
+
+        try:
+            sdk = _sdwan(tenant_id)
+            site_names, elem_names = _name_maps(sdk)
+
+            elements = safe_items(sdk.get.elements())
+            if element_id:
+                elements = [e for e in elements if e.get("id") == element_id]
+            if site_id:
+                elements = [e for e in elements if e.get("site_id") == site_id]
+
+            warnings: list[str] = []
+            all_configs: list[dict[str, Any]] = []
+
+            for elem in elements[:50]:  # cap at 50 elements
+                eid = elem["id"]
+                sid = elem.get("site_id", "")
+                try:
+                    resp = sdk._session.get(
+                        f"{sdk.base_url}/sdwan/v2.1/api/sites/{sid}/elements/{eid}/{endpoint}",
+                        timeout=(10, 20),
+                    )
+                    if resp.status_code == 403:
+                        warnings.append(
+                            _api_error(f"snmp {resource} for {elem.get('name', eid)}", resp)
+                        )
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    for item in data.get("items", []) or []:
+                        all_configs.append(
+                            {
+                                "id": item.get("id"),
+                                "name": item.get("name"),
+                                "element": elem_names.get(eid, eid),
+                                "site": site_names.get(sid, sid),
+                                "config": {
+                                    k: v for k, v in item.items() if k not in ("id", "name")
+                                },
+                            }
+                        )
+                except Exception:
+                    continue
+
+        except Exception as exc:
+            return f"Error: {exc}"
+
+        result: dict[str, Any] = {
+            "resource": resource,
+            "total": len(all_configs),
+            "configs": all_configs,
+        }
+        if warnings:
+            result["warnings"] = warnings
+        return _fmt(result)
+
+    @mcp.tool()
+    def sdwan_event_correlation(
+        tenant_id: str = "",
+        policy_set_id: str = "",
+        site_id: str = "",
+        element_id: str = "",
+        action: str = "list",
+    ) -> str:
+        """Read event correlation policy sets, rules, and triggered correlation events.
+
+        Lists event correlation policy sets and their rules.  When ``site_id`` or
+        ``element_id`` is set, queries correlation events triggered for that scope.
+
+        Write operations (create/update/delete policy sets and rules) are gated
+        behind the Planner write-approval check.
+
+        Args:
+            tenant_id:     TSG ID or settings key. Omit for default tenant.
+            policy_set_id: Fetch a single policy set's rules (optional).
+            site_id:       Query correlation events for a site (optional).
+            element_id:    Query correlation events for an element (optional).
+            action:        ``list`` (default) or ``events`` (correlation events query).
+
+        Returns:
+            JSON: correlation policy sets, rules, and/or events.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            site_names, elem_names = _name_maps(sdk)
+
+            # Correlation events query
+            if action == "events":
+                scope = "sites" if site_id else "elements" if element_id else "interfaces"
+                scope_id = site_id or element_id or ""
+                if not scope_id:
+                    return _fmt({"error": "site_id or element_id required for action='events'"})
+
+                try:
+                    url = f"{sdk.base_url}/sdwan/v2.0/api/{scope}/correlationevents/query"
+                    resp = sdk._session.post(
+                        url,
+                        json={"scope_id": scope_id},
+                        timeout=(10, 30),
+                    )
+                    if resp.status_code == 403:
+                        return _fmt(
+                            {
+                                "action": "events",
+                                "available": False,
+                                "hint": _api_error("correlationevents", resp),
+                            }
+                        )
+                    resp.raise_for_status()
+                    events = resp.json().get("items", [])
+                except Exception as exc:
+                    return _fmt({"error": "correlation_events_failed", "detail": str(exc)[:300]})
+
+                return _fmt(
+                    {
+                        "action": "events",
+                        "total": len(events),
+                        "events": events,
+                    }
+                )
+
+            # List policy sets
+            resp = sdk.get.eventcorrelationpolicysets()
+            sets = safe_items(resp)
+
+            if policy_set_id:
+                sets = [s for s in sets if s.get("id") == policy_set_id]
+                if not sets:
+                    return _fmt({"error": f"Policy set {policy_set_id!r} not found"})
+
+                # Fetch rules for this set
+                rules: list[dict] = []
+                try:
+                    rules_resp = sdk._session.get(
+                        f"{sdk.base_url}/sdwan/v2.0/api/eventcorrelationpolicysets/"
+                        f"{policy_set_id}/eventcorrelationpolicyrules",
+                        timeout=(10, 20),
+                    )
+                    rules_resp.raise_for_status()
+                    rules = rules_resp.json().get("items", [])
+                except Exception:
+                    pass
+
+                return _fmt(
+                    {
+                        "policy_set": sets[0],
+                        "rules": rules,
+                    }
+                )
+
+        except Exception as exc:
+            return f"Error: {exc}"
+
+        return _fmt(
+            {
+                "total": len(sets),
+                "policy_sets": sets,
+            }
+        )
+
+    @mcp.tool()
+    def sdwan_perf_mgmt(
+        tenant_id: str = "",
+        resource: str = "policy_sets",
+    ) -> str:
+        """Read performance management configuration (policy sets, threshold profiles, probe configs).
+
+        Lists performance management policy sets for a tenant.  Use ``resource``
+        to select the sub-resource type.
+
+        Args:
+            tenant_id: TSG ID or settings key. Omit for default tenant.
+            resource:  ``policy_sets`` (default), ``threshold_profiles``, or
+                       ``probe_configs``.
+
+        Returns:
+            JSON: performance management configuration.
+        """
+        _PERF_PATHS = {
+            "policy_sets": "perfmgmtpolicysets",
+            "threshold_profiles": "perfmgmtprofiles",
+            "probe_configs": "perfmgmtprobeconfigs",
+        }
+        if resource not in _PERF_PATHS:
+            return _fmt(
+                {
+                    "error": f"Unknown resource: {resource!r}. "
+                    f"Use one of: {', '.join(_PERF_PATHS)}"
+                }
+            )
+
+        try:
+            sdk = _sdwan(tenant_id)
+            endpoint = _PERF_PATHS[resource]
+
+            # Try SDK method first
+            sdk_method = getattr(sdk.get, endpoint, None)
+            if sdk_method:
+                resp = sdk_method()
+                items = safe_items(resp)
+            else:
+                resp = sdk._session.get(
+                    f"{sdk.base_url}/sdwan/v2.0/api/{endpoint}",
+                    timeout=(10, 20),
+                )
+                if resp.status_code == 403:
+                    return _fmt(
+                        {
+                            "resource": resource,
+                            "available": False,
+                            "hint": _api_error(endpoint, resp),
+                        }
+                    )
+                resp.raise_for_status()
+                items = resp.json().get("items", [])
+
+        except Exception as exc:
+            return f"Error: {exc}"
+
+        return _fmt(
+            {
+                "resource": resource,
+                "total": len(items),
+                "configs": items,
+            }
+        )
+
+    @mcp.tool()
+    def sdwan_events_summary(
+        tenant_id: str = "",
+        hours: int = 24,
+        category: str = "",
+    ) -> str:
+        """Aggregated event summary — counts by severity, category, and type.
+
+        A lighter alternative to ``sdwan_events`` (which returns individual event
+        records).  Uses the POST ``/events/summary`` endpoint for dashboard/SIEM
+        consumption.
+
+        Args:
+            tenant_id: TSG ID or settings key. Omit for default tenant.
+            hours:     Time window in hours (default 24).
+            category:  Filter by event category (optional).
+
+        Returns:
+            JSON: event counts by severity and category.
+        """
+        try:
+            sdk = _sdwan(tenant_id)
+            start, end = _window(hours)
+
+            payload: dict[str, Any] = {
+                "time_range": {"start": start, "end": end},
+            }
+            if category:
+                payload["category"] = category
+
+            # Try v2.1 first, fall back to v2.0
+            for version in ("v2.1", "v2.0"):
+                try:
+                    resp = sdk._session.post(
+                        f"{sdk.base_url}/sdwan/{version}/api/events/summary",
+                        json=payload,
+                        timeout=(10, 30),
+                    )
+                    if resp.status_code == 403:
+                        return _fmt(
+                            {
+                                "available": False,
+                                "hint": _api_error(f"events/summary {version}", resp),
+                            }
+                        )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return _fmt(
+                        {
+                            "time_window_hours": hours,
+                            "category_filter": category or "all",
+                            "summary": data,
+                        }
+                    )
+                except Exception:
+                    continue
+
+            return _fmt(
+                {
+                    "available": False,
+                    "hint": "events/summary endpoint not reachable — may require a broader service-account role.",
+                }
+            )
+
+        except Exception as exc:
+            return f"Error: {exc}"

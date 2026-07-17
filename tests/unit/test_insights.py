@@ -30,13 +30,15 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, response: FakeResponse):
-        self.response = response
+    def __init__(self, response: FakeResponse, *more: FakeResponse):
+        self.responses = [response, *more]
         self.calls: list[dict[str, Any]] = []
 
     def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         self.calls.append({"url": url, "json": json, "headers": headers})
-        return self.response
+        if len(self.responses) > 1:
+            return self.responses.pop(0)
+        return self.responses[0]
 
 
 def _client(session: FakeSession) -> Any:
@@ -111,10 +113,12 @@ class TestBodyAndResults:
         assert out.startswith("Error: invalid JSON in `body`")
         assert session.calls == []  # nothing was sent
 
-    def test_body_passed_through(self) -> None:
+    def test_body_keys_preserved_with_assumed_window(self) -> None:
         session = FakeSession(FakeResponse(payload={"data": []}))
         _invoke(session, resource="x", tenant_id="1", body='{"count": 5}')
-        assert session.calls[0]["json"] == {"count": 5}
+        sent = session.calls[0]["json"]
+        assert sent["count"] == 5
+        assert "filter" in sent  # window assumed alongside the caller's keys
 
     def test_data_array_extracted_with_count(self) -> None:
         session = FakeSession(FakeResponse(payload={"data": [{"a": 1}, {"a": 2}]}))
@@ -127,3 +131,58 @@ class TestBodyAndResults:
         out = json.loads(_invoke(session, resource="tunnels/tunnel_list", tenant_id="1"))
         assert out["error"] == "HTTP 403"
         assert "Forbidden" in out["detail"]
+        assert len(session.calls) == 1  # 403 is not the reject-window signal — no retry
+
+
+class TestDefaultTimeWindow:
+    def test_empty_body_assumes_24h_event_time_window(self) -> None:
+        session = FakeSession(FakeResponse(payload={"data": []}))
+        out = json.loads(
+            _invoke(session, resource="locations/location_rn_bandwidth", tenant_id="1")
+        )
+        rule = session.calls[0]["json"]["filter"]["rules"][0]
+        assert rule == {"property": "event_time", "operator": "last_n_hours", "values": ["24"]}
+        assert out["time_window"] == "last_24h (assumed)"
+
+    def test_hours_param_widens_the_window(self) -> None:
+        session = FakeSession(FakeResponse(payload={"data": []}))
+        _invoke(session, resource="x", tenant_id="1", hours=72)
+        assert session.calls[0]["json"]["filter"]["rules"][0]["values"] == ["72"]
+
+    def test_caller_filter_is_never_touched(self) -> None:
+        session = FakeSession(FakeResponse(payload={"data": []}))
+        body = '{"filter": {"rules": [{"property": "site", "operator": "in", "values": ["x"]}]}}'
+        out = json.loads(_invoke(session, resource="x", tenant_id="1", body=body))
+        rules = session.calls[0]["json"]["filter"]["rules"]
+        assert rules == [{"property": "site", "operator": "in", "values": ["x"]}]
+        assert out["time_window"] == "caller-provided filter"
+
+    def test_400_on_assumed_window_retries_without_it(self) -> None:
+        # A resource with no event_time column rejects the assumed filter;
+        # the call falls back to the bare body and succeeds.
+        session = FakeSession(
+            FakeResponse(status_code=400, payload=None, text="unknown property event_time"),
+            FakeResponse(payload={"data": [{"a": 1}]}),
+        )
+        out = json.loads(_invoke(session, resource="x", tenant_id="1"))
+        assert len(session.calls) == 2
+        assert "filter" in session.calls[0]["json"]  # first try: assumed window
+        assert session.calls[1]["json"] == {}  # retry: bare body
+        assert out["count"] == 1
+        assert out["time_window"] == "none (resource rejected the time filter)"
+
+    def test_400_with_caller_filter_is_not_retried(self) -> None:
+        session = FakeSession(FakeResponse(status_code=400, payload=None, text="bad filter"))
+        body = '{"filter": {"rules": []}}'
+        out = json.loads(_invoke(session, resource="x", tenant_id="1", body=body))
+        assert out["error"] == "HTTP 400"
+        assert len(session.calls) == 1
+
+    def test_extractor_shares_the_same_default_window(self) -> None:
+        from scm_mcp_mssp.tools.insights import DEFAULT_WINDOW_HOURS, default_time_window
+
+        window = default_time_window()
+        rule = window["filter"]["rules"][0]
+        assert rule["operator"] == "last_n_hours"
+        assert rule["values"] == [str(DEFAULT_WINDOW_HOURS)]
+        assert DEFAULT_WINDOW_HOURS == 24
