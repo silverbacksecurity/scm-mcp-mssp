@@ -21,10 +21,12 @@ Env vars:
   SCM_MCP_HTTP_ENTRA_TENANT   Entra tenant ID (entra mode)
   SCM_MCP_HTTP_ENTRA_AUDIENCE App ID / client ID expected in 'aud' claim
   SCM_MCP_HTTP_ALLOWED_ORIGINS CORS origins, comma-separated (default: *)
+  SCM_MCP_HTTP_SSR_WEBHOOK    "1"/"true" enables POST /webhook/ssr (default: off)
 """
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Awaitable, Callable
 
@@ -55,6 +57,9 @@ _ENTRA_AUDIENCE = os.getenv("SCM_MCP_HTTP_ENTRA_AUDIENCE", "")
 _ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("SCM_MCP_HTTP_ALLOWED_ORIGINS", "*").split(",") if o.strip()
 ]
+# /webhook/ssr is a WRITE endpoint (unlike /webhook/ir, which is read-only by
+# construction) — operators must opt in explicitly.
+_SSR_WEBHOOK_ENABLED = os.getenv("SCM_MCP_HTTP_SSR_WEBHOOK", "").lower() in ("1", "true", "yes")
 
 # Entra JWKS URI — fetched once at startup
 _JWKS_CLIENT: jwt.PyJWKClient | None = None
@@ -151,6 +156,86 @@ class AuthMiddleware(BaseHTTPMiddleware):
         )
 
 
+# ─── SSR webhook ─────────────────────────────────────────────────────────────
+
+
+def _coerce_bool(value: object, default: bool) -> bool:
+    """Lenient bool coercion — Power Automate form outputs arrive as strings.
+
+    Only an explicit truthy/falsy string flips the value; anything
+    unrecognized keeps the default, so a malformed dry_run can never
+    silently switch a request into execute mode.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("1", "true", "yes"):
+            return True
+        if v in ("0", "false", "no"):
+            return False
+    return default
+
+
+async def process_ssr_webhook(mcp: object, payload: object) -> tuple[dict[str, object], int]:
+    """Validate an SSR intake payload and run it through ``scm_ssr_execute``.
+
+    Returns ``(body, http_status)``. Separated from the route handler so the
+    logic is testable with a stub MCP instance (same pattern as start_ir_run).
+
+    Statuses:
+      400 — malformed request (missing/invalid fields; nothing was attempted)
+      422 — the SSR tool rejected or failed the request (body carries detail)
+      200 — planned (dry-run) or applied
+    """
+    if not isinstance(payload, dict):
+        return {"error": "body must be a JSON object"}, 400
+
+    missing = [
+        f for f in ("operation", "target", "ticket_ref") if not str(payload.get(f) or "").strip()
+    ]
+    if missing:
+        return {"error": f"missing required field(s): {', '.join(missing)}"}, 400
+
+    params = {
+        "operation": str(payload["operation"]).strip(),
+        "target": str(payload["target"]).strip(),
+        "ticket_ref": str(payload["ticket_ref"]).strip(),
+        "tenant_id": str(payload.get("tenant_id") or "").strip(),
+        "folder": str(payload.get("folder") or "").strip(),
+        "action": str(payload.get("action") or "add").strip().lower(),
+        # Dry-run wins on ambiguity — an execute must say dry_run=false explicitly.
+        "dry_run": _coerce_bool(payload.get("dry_run"), default=True),
+    }
+    requested_by = str(payload.get("requested_by") or "").strip()
+
+    result = await mcp.call_tool("scm_ssr_execute", params)  # type: ignore[attr-defined]
+    blocks = result[0] if isinstance(result, tuple) else result
+    text = "\n".join(getattr(b, "text", str(b)) for b in blocks)
+    try:
+        body: dict[str, object] = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        body = {"status": "error", "error": f"unparseable tool response: {text[:500]}"}
+
+    if requested_by:
+        body["requested_by"] = requested_by
+
+    status_code = 200 if body.get("status") in ("planned", "applied") else 422
+    logger.info(
+        "ssr_webhook_processed",
+        operation=params["operation"],
+        action=params["action"],
+        target=params["target"],
+        tenant_id=params["tenant_id"],
+        ticket_ref=params["ticket_ref"],
+        dry_run=params["dry_run"],
+        requested_by=requested_by,
+        status=body.get("status"),
+        http_status=status_code,
+    )
+    return body, status_code
+
+
 # ─── App factory ─────────────────────────────────────────────────────────────
 
 
@@ -195,11 +280,36 @@ def create_http_app() -> Starlette:
             status_code=202,
         )
 
+    async def ssr_webhook(request: Request) -> JSONResponse:
+        """SSR intake bridge: form/flow front-ends → scm_ssr_execute.
+
+        POST {"operation": ..., "target": ..., "ticket_ref": ..., "action": ...,
+        "tenant_id": ..., "dry_run": ...} — the two-phase contract is the
+        caller's: submit with dry_run=true (default) to get a before/after
+        diff for the approval step, then re-POST with dry_run=false after
+        sign-off. Commit remains a separate scm_commit step; this endpoint
+        never commits. Unlike /webhook/ir this endpoint can WRITE (to
+        ssr_objects-allowlisted objects only), so it is gated behind
+        SCM_MCP_HTTP_SSR_WEBHOOK=1 on top of the usual AuthMiddleware.
+        """
+        if not _SSR_WEBHOOK_ENABLED:
+            return JSONResponse(
+                {"error": "SSR webhook disabled — set SCM_MCP_HTTP_SSR_WEBHOOK=1 to enable"},
+                status_code=403,
+            )
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "body must be JSON"}, status_code=400)
+        body, status_code = await process_ssr_webhook(mcp, payload)
+        return JSONResponse(body, status_code=status_code)
+
     app = Starlette(
         routes=[
             Route("/health", health),
             Route("/healthz", health),
             Route("/webhook/ir", ir_webhook, methods=["POST"]),
+            Route("/webhook/ssr", ssr_webhook, methods=["POST"]),
             Mount("/", app=sse),
         ]
     )
