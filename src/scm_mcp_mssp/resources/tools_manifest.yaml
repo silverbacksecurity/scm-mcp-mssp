@@ -6,7 +6,7 @@
 #
 # Regenerate/verify coverage: tests/unit/test_planner_manifest.py fails
 # whenever a registered tool lacks an entry here (or vice versa).
-# Tools: 141 | write: 22 | domains: 11
+# Tools: 158 | write: 26 | domains: 11
 
 dlp_backup:
   access: read
@@ -15,6 +15,24 @@ dlp_backup:
   retry_policy: retry
   scope: tenant
 dlp_enterprise_list:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+dlp_incidents_assignees:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+dlp_incidents_get:
+  access: read
+  domain: dlp
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+dlp_incidents_list:
   access: read
   domain: dlp
   idempotent: true
@@ -213,6 +231,12 @@ scm_casb_list:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_cdl_logforwarding:
+  access: read
+  domain: deployment
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
 scm_cert_import:
   access: write
   domain: certificates
@@ -283,6 +307,33 @@ scm_config_diff:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_config_orch_bandwidth:
+  access: write
+  domain: deployment
+  idempotent: true
+  known_failure_modes: Write operations (create/update/delete) use SSR pattern — dry_run
+    default, mandatory ticket_ref.  API is the RNHP site-onboarding surface, not the
+    SCM Config API used by scm_bandwidth_allocation_list.
+  retry_policy: fail_fast
+  scope: tenant
+scm_config_orch_profiles:
+  access: write
+  domain: deployment
+  idempotent: true
+  known_failure_modes: IKE gateway reads are idempotent; crypto profile writes follow SSR
+    pattern with dry_run default.  API is the RNHP site-onboarding surface.
+  retry_policy: fail_fast
+  scope: tenant
+scm_config_orch_remote_networks:
+  access: write
+  domain: deployment
+  idempotent: true
+  known_failure_modes: Write operations follow SSR pattern — dry_run default, mandatory
+    ticket_ref.  Location information is a sub-resource of remote network sites.
+    API is the RNHP site-onboarding surface, distinct from the SCM Config API used
+    by scm_remote_network_list.
+  retry_policy: fail_fast
+  scope: tenant
 scm_config_push_track:
   access: write
   domain: config_change
@@ -345,6 +396,14 @@ scm_dlp_list:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_dns_security_lookup:
+  access: write
+  domain: threat_coverage
+  idempotent: true
+  known_failure_modes: Read-only info queries are idempotent; changerequest mode writes
+    to the domain category policy and requires ticket_ref.
+  retry_policy: retry
+  scope: tenant
 scm_dns_server_list:
   access: read
   domain: deployment
@@ -380,6 +439,12 @@ scm_dspt_assess:
 scm_edl_list:
   access: read
   domain: threat_coverage
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+scm_email_dlp_incidents:
+  access: read
+  domain: dlp
   idempotent: true
   retry_policy: retry
   scope: tenant
@@ -437,6 +502,14 @@ scm_incident_summary:
   idempotent: true
   retry_policy: retry
   scope: cross_tenant
+scm_insights_export:
+  access: read
+  domain: operational_health
+  scope: tenant
+  idempotent: true
+  retry_policy: retry
+  known_failure_modes: Schedule/poll/download workflow for Insights exports.  Status
+    and download actions use v2 download endpoints.  Schedule supports v2 and v3.
 scm_insights_query:
   access: read
   domain: operational_health
@@ -498,6 +571,16 @@ scm_mobile_user_stats:
   idempotent: true
   known_failure_modes: Insights connected-user endpoints may 403 on view-only service accounts;
     tool degrades per-section rather than failing.
+  retry_policy: retry
+  scope: tenant
+scm_msr_report:
+  access: read
+  domain: operational_health
+  idempotent: true
+  known_failure_modes: Every source degrades per-section (disclosed in §8) — Insights
+    bandwidth may 400/403 on some tenants, compliance needs Silver+ tier and licence,
+    SSR ledger empty when ssr_objects unconfigured. Incident resolution timestamps
+    absent → MTTR reported n/a.
   retry_policy: retry
   scope: tenant
 scm_mt_analytics:
@@ -782,6 +865,12 @@ sdwan_app_health:
   idempotent: true
   retry_policy: retry
   scope: tenant
+sdwan_app_qos:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
 sdwan_audit_logs:
   access: read
   domain: sdwan
@@ -801,6 +890,14 @@ sdwan_debug_topology:
   idempotent: true
   retry_policy: retry
   scope: tenant
+sdwan_event_correlation:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: Correlation events 403 for current service accounts (RBAC).
+    Write operations (create/update/delete) gated behind explicit action parameter.
+  retry_policy: retry
+  scope: tenant
 sdwan_events:
   access: read
   domain: sdwan
@@ -809,10 +906,31 @@ sdwan_events:
     depth notes).
   retry_policy: retry
   scope: tenant
+sdwan_events_summary:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: 403 for current service accounts (RBAC).
+  retry_policy: retry
+  scope: tenant
 sdwan_flows:
   access: read
   domain: sdwan
   idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_interface_status:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_ipfix_config:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: Write operations (create/update/delete) gated behind explicit
+    action parameter.  IPFIX endpoints may 403 on view-only roles.
   retry_policy: retry
   scope: tenant
 sdwan_link_health:
@@ -875,10 +993,24 @@ sdwan_policy_rules:
   idempotent: true
   retry_policy: retry
   scope: tenant
+sdwan_perf_mgmt:
+  access: read
+  domain: sdwan
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
 sdwan_site_map:
   access: read
   domain: sdwan
   idempotent: true
+  retry_policy: retry
+  scope: tenant
+sdwan_snmp_config:
+  access: read
+  domain: sdwan
+  idempotent: true
+  known_failure_modes: Write operations gated behind Planner write-approval.  403 for
+    current service accounts (RBAC).
   retry_policy: retry
   scope: tenant
 sdwan_software_status:

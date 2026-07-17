@@ -59,8 +59,12 @@ _RELOAD_ORDER = [
     "scm_mcp_mssp.tools.network",
     "scm_mcp_mssp.tools.deployment",
     "scm_mcp_mssp.tools.dlp",
+    "scm_mcp_mssp.tools.dns_security",
+    "scm_mcp_mssp.tools.email_dlp",
     "scm_mcp_mssp.tools.posture",
     "scm_mcp_mssp.tools.compliance",
+    "scm_mcp_mssp.tools.config_orch",
+    "scm_mcp_mssp.tools.cdl_logforwarding",
     "scm_mcp_mssp.tools.insights",
     "scm_mcp_mssp.tools.ssr",
     "scm_mcp_mssp.tools.adnsr",
@@ -77,6 +81,7 @@ _RELOAD_ORDER = [
     "scm_mcp_mssp.tools.setup",
     "scm_mcp_mssp.tools.ncsc_baseline",
     "scm_mcp_mssp.tools.ai_advisor",
+    "scm_mcp_mssp.tools.msr",
 ]
 
 

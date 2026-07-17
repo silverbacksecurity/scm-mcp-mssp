@@ -25,10 +25,15 @@ from .tools.adnsr import register_adnsr_tools
 from .tools.ai_advisor import register_ai_advisor_tools
 from .tools.aiops import register_aiops_tools
 from .tools.audit import register_audit_tools
+from .tools.cdl_logforwarding import register_cdl_logforwarding_tools
 from .tools.compliance import register_compliance_tools
+from .tools.config_orch import register_config_orch_tools
 from .tools.deployment import register_deployment_tools
 from .tools.dlp import register_dlp_tools
+from .tools.dns_security import register_dns_security_tools
+from .tools.email_dlp import register_email_dlp_tools
 from .tools.insights import register_insights_tools
+from .tools.msr import register_msr_tools
 from .tools.mssp import register_casb_dlp_tools, register_mssp_tools, register_ngfw_airs_tools
 from .tools.mt_interconnect import register_spi_tools
 from .tools.mt_monitor import register_mt_monitor_tools
@@ -154,11 +159,15 @@ def register_all_tools(
     register_deployment_tools(mcp, get_client)
     register_setup_tools(mcp, get_client)
     register_audit_tools(mcp, get_client)
+    register_cdl_logforwarding_tools(mcp, get_client)
     register_compliance_tools(mcp, get_client)
+    register_config_orch_tools(mcp, get_client)
     register_mssp_tools(mcp, get_client, get_settings)
     register_casb_dlp_tools(mcp, get_client)
     register_ngfw_airs_tools(mcp, get_client)
     register_dlp_tools(mcp, get_client)
+    register_dns_security_tools(mcp, get_client)
+    register_email_dlp_tools(mcp, get_client)
     register_sdwan_tools(mcp, get_client)
     register_ncsc_tools(mcp, get_client)
     register_ai_advisor_tools(mcp, get_client)
@@ -166,6 +175,7 @@ def register_all_tools(
     register_posture_tools(mcp, get_client)
     register_adnsr_tools(mcp, get_client)
     register_ops_tools(mcp, get_client)
+    register_msr_tools(mcp, get_client)
     register_spi_tools(mcp, get_client)
     register_pab_msp_tools(mcp, get_client)
     register_pab_tools(mcp, get_client)

@@ -40,6 +40,12 @@ def parse_any_ts(value: Any) -> datetime | None:
             return datetime.fromtimestamp(int(s), tz=UTC)
         except (ValueError, OverflowError):
             return None
+    # ISO 8601 with Z or offset (Incidents API raised_time is Z-suffixed)
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
+    except ValueError:
+        pass
     s = s.split(".")[0].replace("T", " ")
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
@@ -199,7 +205,7 @@ def render_rca_report(
         for i, c in enumerate(candidates[:15], 1):
             rel = f"{abs(c['delta_min'])} min " + ("before" if c["delta_min"] >= 0 else "after")
             lines.append(
-                f"| {i} | {c['ts']} | {rel} | {c['kind']} " f"| {c['desc']} | {c['evidence']} |"
+                f"| {i} | {c['ts']} | {rel} | {c['kind']} | {c['desc']} | {c['evidence']} |"
             )
         if len(candidates) > 15:
             lines.append(f"| … | | | | +{len(candidates) - 15} more in window | |")

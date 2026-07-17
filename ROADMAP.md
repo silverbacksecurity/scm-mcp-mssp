@@ -9,6 +9,28 @@ do about it.
 
 ## Recently shipped
 
+- **MT Monitor round 3** (2026-07-17) — `scm_mt_analytics` now covers 24 views
+  across 34 of 36 catalog paths: alerts, threat list/source, app source, incident
+  list/trends/tenants/impacted, service health (CDL, gateway, outliers, unique
+  users), URL summary, locations-tenants, tenant hierarchy, license setup/allocated,
+  and app monitor. `applications/list` (400) and `locationsUsers` (500) remain
+  blocked on PAN spec refresh.
+- **Insights scheduled export** (2026-07-17) — `scm_insights_export` for the
+  three-step schedule → poll → download pipeline. Fixed v3 export path bug
+  (`/query/` prefix was incorrectly prepended to `export/` and `download` paths).
+- **SD-WAN Depth Round 3** (2026-07-17) — 7 new tools: app QoS, interface status,
+  IPFIX config, SNMP config, event correlation, performance management, and
+  events summary. 28 total SD-WAN tools completing the depth roadmap.
+- **Configuration Orchestration** (2026-07-17) — 3 SSR-pattern tools for the
+  RNHP site-onboarding API: `scm_config_orch_remote_networks`, `_bandwidth`,
+  `_profiles`. First write-heavy tool family — `dry_run` default, mandatory
+  `ticket_ref`. The `sase/config-orch` family (32 endpoints) is now fully tooled.
+- **Newly catalogued small families** (2026-07-17) — email-dlp, dns-security,
+  cdl/logforwarding, and DLP incidents tools shipped. `family_probe.py` utility
+  for pre-scaffold entitlement probing. `cloudngfw/aws` deferred.
+- **Spec-schema request validation** (2026-07-17) — `jsonschema`-based pre-request
+  validation layer injected at Insights chokepoints; gracefully degrades without
+  a schema file.
 - **Compliance Center API tools** (2026-07-15) — `scm_compliance_center` +
   `scm_compliance_framework` covering all 15 endpoints of PAN's new Compliance
   Center API (released 2026-07-14): framework CRUD, compliance scores by product
@@ -193,125 +215,59 @@ do about it.
 
 ## Next
 
-_Last pan.dev check: 2026-07-16 — no new spec files since 2026-07-14.
+_Last pan.dev check: 2026-07-17 — no new spec files since 2026-07-14.
 Catalog regenerated (`generated_at: 2026-07-16`, 3,883 endpoints). No other
 upstream drift. `pan-scm-sdk` is current (0.15.1 installed = PyPI latest);
 `prisma-sase` and `mcp` also current.
-**Five Next items shipped 2026-07-15:** Compliance Center, SSR, Insights 2.0,
-Aggregate monitoring round 2, and CLI UX overhaul are now in Recently Shipped._
+All API-coverage Next items shipped 2026-07-17; remaining coverage items are
+blocked on RBAC, licensed tenants, PAN spec fixes, or Planner API-key smoke
+testing._
 
-- ✅ **SSR — Simple Service Requests (restricted customer-change CRUD)** — shipped 2026-07-15.  A
-  single two-phase tool (working name `scm_ssr_execute`) automating the three
-  commonest customer change requests: URL allow/block-listing, threat
-  exceptions (include/exclude a threat ID in anti-spyware / vulnerability
-  protection profiles), and SSL decryption include/exclude. All three reduce
-  to one primitive — add/remove an entry in a designated SSR-managed object —
-  so the "restricted to basic" property is structural, not policy: the tool
-  only edits objects named in a per-tenant allowlist in settings.toml (e.g.
-  `SSR-Allow-List` / `SSR-Block-List` / `SSR-Decrypt-Exclude` custom URL
-  categories referenced once by existing rules at onboarding; profile
-  `threat_exception` lists) and never touches a rulebase. Contract is
-  machine-first, unlike every existing tool: JSON in/out for playbook
-  branching, idempotent (re-adding an existing entry returns success +
-  `already_present`, safe under orchestrator retries), `dry_run=True` default
-  returning a before/after diff, mandatory `ticket_ref` echoed into the
-  object description and commit message so the config carries its own
-  provenance. Commit stays a separate explicit `scm_commit` step so the
-  orchestrator owns sign-off. Intake is external and swappable — ServiceNow
-  form or templated email → XSOAR playbook, or Teams form → Power
-  Automate / Copilot Studio (MCP-native since 2025) — all mapping to the same
-  dry-run diff → human approval → apply + commit flow. Validation stays
-  server-side regardless of front-end (strict URL syntax, no over-broad
-  wildcards, threat ID must exist; a compromised playbook still can't reach
-  past the allowlisted objects). Prerequisites: auth on the SSE transport
-  (bearer/mTLS — today the SSE port exposes every tool unauthenticated) and
-  ideally a restricted entrypoint registering only the SSR surface + commit
-  instead of the full tool set. SDK is ready now: `url_categories`,
-  `decryption_rule`, `anti_spyware_profile`, and
-  `vulnerability_protection_profile` all have full CRUD in pan-scm-sdk.
-- **Branch NAT IP, PA side (IKE peer IP per circuit)** — the SD-WAN side is
-  done (see Recently shipped: element status `config_and_events_from` gives
-  the post-NAT egress of the circuit the controller connection rides, and
-  servicelink interface status exposes the full IKE/IPsec overlay state).
-  What it can't give is the branch's NAT IP *per circuit* — that's what
-  Prisma Access sees as the IKE peer on each RN tunnel. The right endpoint
-  is Insights `tunnels/tunnel_list` (already used by the compliance
-  snapshot), but every current service account gets HTTP 403 on it — same
-  RBAC class as the known `allocated_ips` 403 (view-only roles). Blocked on
-  a service account with an Insights/monitor read role; validate live, then
-  join PA-side peer IP to SD-WAN servicelinks by service_endpoint. No
-  remote-exec alternative exists: ION `toolkitsessions` endpoints are audit
-  records of interactive Device Toolkit sessions, not a run-a-command API,
-  and the SD-WAN events API 500s on bare queries (needs schema work).
-- **ADEM path enrichment (branch → DC hop counts)** — `access/adem` (13
-  paths, zero tooling) includes `/adem/telemetry/v2/measure/route/hops` —
-  per-hop network path telemetry from ADEM synthetic tests — plus
-  application/agent metric+score and internet-measure endpoints. Natural
-  third dimension on top of the WAN IP work: WAN IP summary says *what
-  circuit and ISP*, enrichment says *where and who*, ADEM route hops say
-  *how the path actually performs* (hop count, per-hop latency
-  branch → DC/app). Requires an ADEM-licensed tenant with agents/tests
-  enabled for live validation — same rule as SPI/5G: don't scaffold blind.
-- **Classic Prisma SD-WAN depth (round 3)** — rounds 1–2 (2026-07-12, see
-  Recently shipped) covered events, audit logs, software, policy rules,
-  link quality, flows/top talkers, app healthscore/top-N, and cellular
-  module status. Still unbuilt from the 2,162-path
-  `sdwan/legacy`+`sdwan/unified` families: application QoS aggregates
-  (`monitor/aggregates/application/qos` — needs `filter.application_name`
-  + `AggregateMetric{name,statistic,unit}`; metric names undocumented,
-  probe live), interface-level status sweeps, IPFIX/SNMP config, and
-  event-correlation policy config. Audit log + software history remain
-  403 for current view-only service accounts — same blocker as Insights
-  `tunnel_list`; revisit when a broader read role lands.
-- **Configuration Orchestration (site-based Remote Networks)** — `sase/config-orch`,
-  11 paths, **zero tooling**. Site + license workflow onboarding (the
-  partner-facing RNHP site model) complementing the existing per-RN tooling.
-- **5G Manage/Monitor** — `sase/manage-services-5g` (27 paths) +
-  `sase/monitor-services-5g` (20 paths), **zero tooling**. Refreshed Oct 2025 /
-  Feb 2026. Pick up when a 5G-enrolled tenant is available for live
-  validation (same pattern as SPI — don't scaffold blind against a spec with
-  no lab account to test 401/403 handling against).
-- **Multitenant Notifications** — `sase/mt-notifications`, 10 paths, **zero
-  tooling**. Gateway path confirmed live 2026-07-13
-  (`/mt/notifications/api/cloud/2.0/agg/notifications/*`) but current
-  service accounts get 403 Access denied — blocked on an MSP notifications
-  role, same class as Insights `tunnel_list`.
-- ✅ **Aggregate monitoring round 2** — shipped 2026-07-15.  `scm_mt_analytics` (2026-07-13, see
-  Recently shipped) covers apps/threats/connectivity/incidents. Still
-  unused: applicationUsage, urlLogs, upgrades/list, location trends, the
-  custom license quota/utilization GETs, and the two endpoints that fail
-  on their own spec examples (`applications/list`, `locationsUsers`).
-- ✅ **Insights 2.0 — general-purpose query tool** — shipped 2026-07-15.  `access/insights`, 103 paths across 7
-  spec files; only ~5 queries are hardcoded today (connected users v2/v3,
-  per-SPN throughput in `scm_spn_bandwidth`). Custom queries, scheduled
-  exports, and report downloads are unused.
-- **SPI in documents and dashboards** — AS-BUILT §3 SP Interconnect section
-  (interconnects, VLAN attachments, IP pools) and an SPI health column in the
-  NOC dashboard. Blocked on access to an SPI-enrolled MSP-mode service
-  account for live validation (current accounts get 401 on `/mt/sp-interconnect/*`).
-- **Spec-schema request validation** — validate raw-REST query/body params
-  against the OpenAPI schemas before calling (fewer opaque 400s).
-- ✅ **Compliance Center API (new upstream 2026-07-14)** — shipped 2026-07-15.  `posture/
-  compliance-frameworks/v1`, 12 paths, **zero tooling**. Framework
-  definitions CRUD + clone + benchmark/un-benchmark, plus analytics:
-  per-framework compliance scores, score timeline, configurations
-  assessed, compliance controls, framework summaries, and benchmark
-  monitoring with report download. Directly adjacent to the existing
-  NCSC/NIST/ISO 27001/DSPT assessment tools — could replace or
-  cross-check the local scoring in `scm_ncsc_assess`-family tools with
-  PAN's own framework scoring, and "custom framework (CCF) + benchmark"
-  maps naturally onto the MSSP per-customer baseline idea. Usual rule:
-  probe live against a lab tenant first (new product surface — expect
-  401/403 until the right role/entitlement exists), then curate into
-  1–2 ergonomic tools rather than 12 endpoint wrappers.
-- **Newly catalogued small families — scope before building** — `dlp`
-  (standalone Enterprise DLP, 29 paths, includes a Beta Incidents API),
-  `dns-security` (standalone Advanced DNS Security, 2 paths), `cloudngfw/aws`
-  (Cloud NGFW-for-AWS marketplace API, 76 paths), `cdl/logforwarding` (6
-  paths), `email-dlp` (3 paths). These are different products/subscriptions
-  than SCM/SASE config — confirm a managed tenant actually holds the
-  entitlement before scaffolding tools, rather than building against specs
-  no lab account can exercise.
+- ✅ **Monthly Service Review pack generator** — shipped 2026-07-17 as
+  `scm_msr_report` (`tools/msr.py` + `audit/msr_report.py`): period-bounded
+  incidents + config jobs, cumulative SSR provenance ledger, tier-gated
+  compliance depth (Gold gets the 30d trend annex), licence/renewal posture,
+  Insights bandwidth snapshot, mechanical MTTR/ack-rate/change-failure stats,
+  ranked executive summary, per-section degradation with coverage disclosure,
+  markdown/DOCX output. Live-validated bronze + gold paths incl. real DOCX.
+  Follow-ups when useful: a Slides/deck variant for the customer meeting, a
+  `scm-planner-nightly`-style console script dropping the whole estate's
+  packs on the 1st of the month, and month-window (vs 24h snapshot)
+  bandwidth aggregation once an Insights query shape for it is validated.
+- ✅ **SD-WAN Depth Round 3** — shipped 2026-07-17.  7 new tools: `sdwan_app_qos`,
+  `sdwan_interface_status`, `sdwan_ipfix_config`, `sdwan_snmp_config`,
+  `sdwan_event_correlation`, `sdwan_perf_mgmt`, `sdwan_events_summary`.
+  28 total SD-WAN tools.
+- ✅ **Configuration Orchestration (site-based Remote Networks)** — shipped 2026-07-17.
+  3 SSR-pattern tools: `scm_config_orch_remote_networks`, `_bandwidth`, `_profiles`.
+- ✅ **Spec-schema request validation** — shipped 2026-07-17.  `jsonschema`-based
+  validation layer, injected at Insights chokepoints; gracefully degrades.
+- ✅ **Newly catalogued small families** — shipped 2026-07-17.  email-dlp,
+  dns-security, cdl/logforwarding, and DLP incidents tools built. `cloudngfw/aws`
+  deferred until a lab tenant with Cloud NGFW entitlement exists.
+- ✅ **MT Monitor round 3** — shipped 2026-07-17.  24 views covering 34/36 catalog paths.
+- ✅ **Insights export workflow** — shipped 2026-07-17.  `scm_insights_export` +
+  v3 export path fix.
+
+### Blocked
+
+- **Branch NAT IP, PA side (IKE peer IP per circuit)** — blocked on a service
+  account with an Insights/monitor read role (Insights `tunnel_list` 403 for
+  view-only roles).
+- **Multitenant Notifications** — `sase/mt-notifications`, 10 paths. Gateway path
+  confirmed live but current service accounts get 403.
+- **SPI in documents and dashboards** — AS-BUILT §3 + NOC dashboard SPI column.
+  Blocked on SPI-enrolled MSP-mode service account (401 on `/mt/sp-interconnect/*`).
+- **ADEM path enrichment** — `access/adem`, 13 paths.  Needs ADEM-licensed tenant
+  with agents/tests enabled.
+- **5G Manage/Monitor** — 47 paths.  Needs 5G-enrolled tenant.
+- **cloudngfw/aws** — 135 paths.  Deferred until lab tenant with Cloud NGFW
+  entitlement exists.
+- **`applications/list` + `locationsUsers`** — both reject or 500 on PAN's own
+  spec examples.  Blocked on upstream spec refresh.
+- **Planner Phase 2 sub-plan delegation** — domain-scoped executor wiring exists
+  (`build_catalog(domains=[...])`).  Live smoke pending Anthropic API key in
+  `.secrets.toml`.
 
 ## Epic: Planner Agent — Agentic Orchestration Layer for scm-mcp-mssp
 
