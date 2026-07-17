@@ -86,8 +86,8 @@ class TestUrlConstruction:
 class TestHeaders:
     def test_tenant_header_present_when_tenant_given(self) -> None:
         session = FakeSession(FakeResponse(payload={"data": []}))
-        _invoke(session, resource="x", tenant_id="1061891050")
-        assert session.calls[0]["headers"]["Prisma-Tenant"] == "1061891050"
+        _invoke(session, resource="x", tenant_id="1234567890")
+        assert session.calls[0]["headers"]["Prisma-Tenant"] == "1234567890"
 
     def test_no_empty_tenant_header(self) -> None:
         session = FakeSession(FakeResponse(payload={"data": []}))
