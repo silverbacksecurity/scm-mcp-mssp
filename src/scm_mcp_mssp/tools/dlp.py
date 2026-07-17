@@ -592,7 +592,7 @@ def register_dlp_tools(mcp: FastMCP, get_client: Any) -> None:
                 "filters": {
                     "status": status or "all",
                     "severity": severity or "all",
-                    "limit": limit,
+                    "limit": min(limit, 200),
                 },
             },
             indent=2,

@@ -65,6 +65,29 @@ def with_time_window(body: dict[str, Any] | None, hours: int) -> dict[str, Any]:
     return merged
 
 
+def _resolve_region(tenant_id: str, region: str) -> str:
+    """Resolve the X-PANW-Region header value for a tenant.
+
+    An explicit ``region`` wins; otherwise the tenant's configured
+    ``insights_region`` is mapped, falling back to ``europe``.
+    """
+    if region:
+        return region
+    try:
+        from ..config.settings import load_all_tenant_configs
+
+        cfgs = load_all_tenant_configs()
+        if tenant_id:
+            tc = next((c for c in cfgs.values() if c.tenant_id == tenant_id), None)
+        else:
+            tc = next(iter(cfgs.values()), None) if cfgs else None
+        if tc is not None:
+            return _REGION_MAP.get(tc.insights_region, "europe")
+    except Exception:
+        pass
+    return "europe"
+
+
 def _refresh_token(client: Any) -> None:
     """Refresh the OAuth token before direct-session calls.
 
@@ -182,20 +205,7 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
             _refresh_token(client)
 
             # --- Resolve region ---
-            if not region:
-                region = "europe"
-                try:
-                    from ..config.settings import load_all_tenant_configs
-
-                    cfgs = load_all_tenant_configs()
-                    if tenant_id:
-                        tc = next((c for c in cfgs.values() if c.tenant_id == tenant_id), None)
-                    else:
-                        tc = next(iter(cfgs.values()), None) if cfgs else None
-                    if tc is not None:
-                        region = _REGION_MAP.get(tc.insights_region, "europe")
-                except Exception:
-                    pass
+            region = _resolve_region(tenant_id, region)
 
             # --- Resolve base URL ---
             version = api_version.strip().lower()
@@ -271,7 +281,7 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
 
     @mcp.tool()
     def scm_insights_export(
-        resource: str,
+        resource: str = "",
         tenant_id: str = "",
         body: str = "",
         action: str = "schedule",
@@ -298,6 +308,7 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
         Args:
             resource:    Insights resource path to export (e.g.
                          ``users/agent/user_list``, ``gp_mobileusers/user_list``).
+                         Required for ``schedule``; unused for status/download.
             tenant_id:   SCM tenant ID. Defaults to active tenant.
             body:        JSON query filter for the export (optional).
             action:      ``schedule`` (default), ``status``, or ``download``.
@@ -328,20 +339,7 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
                     return "Error: no HTTP session available on SCM client."
                 _refresh_token(client)
 
-                if not region:
-                    region = "europe"
-                    try:
-                        from ..config.settings import load_all_tenant_configs
-
-                        cfgs = load_all_tenant_configs()
-                        if tenant_id:
-                            tc = next((c for c in cfgs.values() if c.tenant_id == tenant_id), None)
-                        else:
-                            tc = next(iter(cfgs.values()), None) if cfgs else None
-                        if tc is not None:
-                            region = _REGION_MAP.get(tc.insights_region, "europe")
-                    except Exception:
-                        pass
+                region = _resolve_region(tenant_id, region)
 
                 if action == "status":
                     path = f"{_INSIGHTS_BASE_V2}/download/status"
@@ -377,20 +375,7 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
                 return "Error: no HTTP session available on SCM client."
             _refresh_token(client)
 
-            if not region:
-                region = "europe"
-                try:
-                    from ..config.settings import load_all_tenant_configs
-
-                    cfgs = load_all_tenant_configs()
-                    if tenant_id:
-                        tc = next((c for c in cfgs.values() if c.tenant_id == tenant_id), None)
-                    else:
-                        tc = next(iter(cfgs.values()), None) if cfgs else None
-                    if tc is not None:
-                        region = _REGION_MAP.get(tc.insights_region, "europe")
-                except Exception:
-                    pass
+            region = _resolve_region(tenant_id, region)
 
             resource_clean = resource.strip().lstrip("/")
             body_dict: dict | None = None

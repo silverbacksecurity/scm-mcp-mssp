@@ -1984,10 +1984,9 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                             "hint": "QoS aggregate API may require a different service-account role.",
                         }
                     )
+            site_names, elem_names = _name_maps(sdk)
         except Exception as exc:
             return f"Error: {exc}"
-
-        site_names, elem_names = _name_maps(sdk)
 
         enriched: list[dict[str, Any]] = []
         for item in items:
@@ -2079,7 +2078,15 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                 try:
                     resp = sdk.get.elements()
                     elements = safe_items(resp)
-                    target = [e for e in elements if e.get("id") == element_id] or elements[:1]
+                    target = [e for e in elements if e.get("id") == element_id]
+                    if not target:
+                        return _fmt(
+                            {
+                                "total": 0,
+                                "interfaces": [],
+                                "hint": f"element_id {element_id!r} not found in this tenant.",
+                            }
+                        )
                     for elem in target:
                         try:
                             if_resp = sdk._session.get(

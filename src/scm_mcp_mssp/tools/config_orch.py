@@ -102,6 +102,22 @@ def _check_write_safety(action: str, dry_run: bool, ticket_ref: str) -> str:
     return ""
 
 
+def _audit_write(tool: str, action: str, ticket_ref: str, tenant_id: str, resource_id: str) -> None:
+    """Log an applied (non-dry-run) write for the change audit trail.
+
+    The RNHP API doesn't accept a ticket_ref field in request bodies, so the
+    ticket reference is recorded here and echoed in tool responses instead.
+    """
+    logger.info(
+        "config_orch_write",
+        tool=tool,
+        action=action,
+        ticket_ref=ticket_ref,
+        tenant_id=tenant_id or "default",
+        resource_id=resource_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -210,8 +226,6 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
             except json.JSONDecodeError as exc:
                 return _fmt({"error": f"body_json is not valid JSON: {exc}"})
 
-            body["ticket_ref"] = ticket_ref
-
             if dry_run:
                 return _fmt(
                     {
@@ -223,6 +237,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                     }
                 )
 
+            _audit_write("scm_config_orch_remote_networks", "create", ticket_ref, tenant_id, "")
             status, data, err = _rest_call(session, "POST", base, json_body=body)
             if data is None:
                 return _fmt(
@@ -245,8 +260,6 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
             except json.JSONDecodeError as exc:
                 return _fmt({"error": f"body_json is not valid JSON: {exc}"})
 
-            body["ticket_ref"] = ticket_ref
-
             if dry_run:
                 # Show current state for diff
                 status, current, _ = _rest_call(session, "GET", f"{base}/{resource_id}")
@@ -262,6 +275,9 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                     }
                 )
 
+            _audit_write(
+                "scm_config_orch_remote_networks", "update", ticket_ref, tenant_id, resource_id
+            )
             status, data, err = _rest_call(session, "PUT", f"{base}/{resource_id}", json_body=body)
             if data is None:
                 return _fmt(
@@ -294,6 +310,9 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                     }
                 )
 
+            _audit_write(
+                "scm_config_orch_remote_networks", "delete", ticket_ref, tenant_id, resource_id
+            )
             status, data, err = _rest_call(session, "DELETE", f"{base}/{resource_id}")
             if status == 204:
                 return _fmt({"action": "delete", "resource_id": resource_id, "applied": True})
@@ -359,6 +378,9 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
         base = f"{_CONFIG_ORCH_BASE}/{api_version}/bandwidth-allocations"
         read_base = f"{_CONFIG_ORCH_BASE}/{api_version}/bandwidth-allocations-read"
 
+        if action in ("create", "update") and not body_json:
+            return _fmt({"error": "body_json is required for create/update"})
+
         # -- Read actions -----------------------------------------------------
         if action == "list":
             status, data, err = _rest_call(
@@ -396,14 +418,14 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
             )
 
         # -- Write actions ----------------------------------------------------
-        if not body_json:
-            return _fmt({"error": "body_json is required for create/update"})
-        try:
-            body = json.loads(body_json)
-        except json.JSONDecodeError as exc:
-            return _fmt({"error": f"body_json is not valid JSON: {exc}"})
-
-        body["ticket_ref"] = ticket_ref
+        # delete needs no payload; create/update parse theirs here (presence
+        # was already checked above, before the API round-trips).
+        body: dict[str, Any] = {}
+        if action in ("create", "update"):
+            try:
+                body = json.loads(body_json)
+            except json.JSONDecodeError as exc:
+                return _fmt({"error": f"body_json is not valid JSON: {exc}"})
 
         if action == "create":
             if dry_run:
@@ -417,6 +439,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                         "hint": "Set dry_run=False to apply.",
                     }
                 )
+            _audit_write("scm_config_orch_bandwidth", "create", ticket_ref, tenant_id, "")
             status, data, err = _rest_call(session, "POST", base, json_body=body)
             if data is None:
                 return _fmt(
@@ -441,6 +464,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                         "hint": "Set dry_run=False to apply.",
                     }
                 )
+            _audit_write("scm_config_orch_bandwidth", "update", ticket_ref, tenant_id, resource_id)
             status, data, err = _rest_call(session, "PUT", f"{base}/{resource_id}", json_body=body)
             if data is None:
                 return _fmt(
@@ -471,6 +495,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                         "hint": "Set dry_run=False to apply.",
                     }
                 )
+            _audit_write("scm_config_orch_bandwidth", "delete", ticket_ref, tenant_id, resource_id)
             status, data, err = _rest_call(session, "DELETE", f"{base}/{resource_id}")
             return _fmt(
                 {
@@ -586,14 +611,15 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
             return _fmt({"profile_type": profile_type, "resource_id": resource_id, "profile": data})
 
         # -- Write actions (crypto profiles only) -----------------------------
-        if not body_json:
-            return _fmt({"error": "body_json is required for create/update"})
-        try:
-            body = json.loads(body_json)
-        except json.JSONDecodeError as exc:
-            return _fmt({"error": f"body_json is not valid JSON: {exc}"})
-
-        body["ticket_ref"] = ticket_ref
+        # delete needs no payload; create/update parse theirs here.
+        body: dict[str, Any] = {}
+        if action in ("create", "update"):
+            if not body_json:
+                return _fmt({"error": "body_json is required for create/update"})
+            try:
+                body = json.loads(body_json)
+            except json.JSONDecodeError as exc:
+                return _fmt({"error": f"body_json is not valid JSON: {exc}"})
 
         if action == "create":
             if dry_run:
@@ -607,6 +633,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                         "hint": "Set dry_run=False to apply.",
                     }
                 )
+            _audit_write("scm_config_orch_profiles", "create", ticket_ref, tenant_id, "")
             status, data, err = _rest_call(session, "POST", base, json_body=body)
             if data is None:
                 return _fmt(
@@ -638,6 +665,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                         "hint": "Set dry_run=False to apply.",
                     }
                 )
+            _audit_write("scm_config_orch_profiles", "update", ticket_ref, tenant_id, resource_id)
             status, data, err = _rest_call(session, "PUT", f"{base}/{resource_id}", json_body=body)
             if data is None:
                 return _fmt(
@@ -674,6 +702,7 @@ def register_config_orch_tools(mcp: FastMCP, get_client: Any) -> None:
                         "hint": "Set dry_run=False to apply.",
                     }
                 )
+            _audit_write("scm_config_orch_profiles", "delete", ticket_ref, tenant_id, resource_id)
             status, data, err = _rest_call(session, "DELETE", f"{base}/{resource_id}")
             return _fmt(
                 {

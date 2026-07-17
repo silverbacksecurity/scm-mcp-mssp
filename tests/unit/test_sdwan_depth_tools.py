@@ -550,3 +550,135 @@ def test_cellular_status_element_filter(tools: dict[str, Any]) -> None:
     data = json.loads(tools["sdwan_cellular_status"](element_id="e2"))
     assert data["total"] == 1
     assert data["modules"][0]["module_id"] == "cm2"
+
+
+# ---------------------------------------------------------------------------
+# Round 3 tools (raw _session paths)
+# ---------------------------------------------------------------------------
+
+
+class _SessResp:
+    def __init__(self, status_code: int = 200, content: dict[str, Any] | None = None) -> None:
+        self.status_code = status_code
+        self._content = content if content is not None else {"items": []}
+        self.text = json.dumps(self._content)
+
+    def json(self) -> dict[str, Any]:
+        return self._content
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise Exception(f"HTTP {self.status_code}")
+
+
+class _FakeHttpSession:
+    """Routes raw sdk._session calls by URL substring; records calls."""
+
+    def __init__(self, routes: dict[str, _SessResp] | None = None) -> None:
+        self.routes = routes or {}
+        self.calls: list[dict[str, Any]] = []
+
+    def _dispatch(self, method: str, url: str, **kwargs: Any) -> _SessResp:
+        self.calls.append({"method": method, "url": url, "json": kwargs.get("json")})
+        for fragment, resp in self.routes.items():
+            if fragment in url:
+                return resp
+        return _SessResp(200, {"items": []})
+
+    def get(self, url: str, **kwargs: Any) -> _SessResp:
+        return self._dispatch("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> _SessResp:
+        return self._dispatch("POST", url, **kwargs)
+
+
+@pytest.fixture
+def r3_tools(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    fake_sdk = make_fake_sdk()
+    fake_sdk.base_url = "https://api.sase.paloaltonetworks.com"
+    fake_sdk._session = _FakeHttpSession()
+    monkeypatch.setattr(sdwan_tools, "get_tenant_meta", lambda tid: SimpleNamespace(tenant_id=tid))
+    monkeypatch.setattr(sdwan_tools, "list_loaded_tenants", lambda: ["t1"])
+    monkeypatch.setattr(sdwan_tools, "get_sdwan_client", lambda tc: fake_sdk)
+    mcp = FastMCP("test")
+    sdwan_tools.register_sdwan_tools(mcp, None)
+    tools = {name: tool.fn for name, tool in mcp._tool_manager._tools.items()}
+    tools["_sdk"] = fake_sdk
+    return tools
+
+
+def test_r3_tools_register(r3_tools: dict[str, Any]) -> None:
+    assert {
+        "sdwan_app_qos",
+        "sdwan_interface_status",
+        "sdwan_ipfix_config",
+        "sdwan_snmp_config",
+        "sdwan_event_correlation",
+        "sdwan_perf_mgmt",
+        "sdwan_events_summary",
+    } <= set(r3_tools)
+
+
+def test_interface_status_unknown_element_returns_hint(r3_tools: dict[str, Any]) -> None:
+    """Regression: an unknown element_id used to silently fall back to the
+    first element in the estate and return the wrong element's interfaces."""
+    data = json.loads(r3_tools["sdwan_interface_status"](element_id="does-not-exist"))
+    assert data["total"] == 0
+    assert "not found" in data["hint"]
+
+
+def test_interface_status_query_path(r3_tools: dict[str, Any]) -> None:
+    r3_tools["_sdk"]._session.routes["/interfaces/query"] = _SessResp(
+        200,
+        {
+            "items": [
+                {
+                    "id": "if1",
+                    "name": "port1",
+                    "element_id": "e1",
+                    "site_id": "s1",
+                    "admin_up": True,
+                    "operational_status": "up",
+                }
+            ]
+        },
+    )
+    data = json.loads(r3_tools["sdwan_interface_status"]())
+    assert data["total"] == 1
+    iface = data["interfaces"][0]
+    assert iface["element"] == "ion-1"
+    assert iface["site"] == "Branch-1"
+    assert iface["oper_state"] == "up"
+
+
+def test_events_summary_happy_path(r3_tools: dict[str, Any]) -> None:
+    r3_tools["_sdk"]._session.routes["/events/summary"] = _SessResp(
+        200, {"items": [{"severity": "major", "count": 3}]}
+    )
+    data = json.loads(r3_tools["sdwan_events_summary"](hours=6))
+    assert data["time_window_hours"] == 6
+    assert data["summary"]["items"][0]["count"] == 3
+
+
+def test_perf_mgmt_session_fallback(r3_tools: dict[str, Any]) -> None:
+    r3_tools["_sdk"]._session.routes["/perfmgmtpolicysets"] = _SessResp(
+        200, {"items": [{"id": "pm1", "name": "default"}]}
+    )
+    data = json.loads(r3_tools["sdwan_perf_mgmt"]())
+    assert data["total"] == 1
+    assert data["resource"] == "policy_sets"
+
+
+def test_perf_mgmt_unknown_resource(r3_tools: dict[str, Any]) -> None:
+    data = json.loads(r3_tools["sdwan_perf_mgmt"](resource="bogus"))
+    assert "Unknown resource" in data["error"]
+
+
+def test_ipfix_unknown_resource(r3_tools: dict[str, Any]) -> None:
+    data = json.loads(r3_tools["sdwan_ipfix_config"](resource="bogus"))
+    assert "Unknown resource" in data["error"]
+
+
+def test_ipfix_element_requires_ids(r3_tools: dict[str, Any]) -> None:
+    data = json.loads(r3_tools["sdwan_ipfix_config"](resource="element_ipfix"))
+    assert "site_id and element_id" in data["error"]

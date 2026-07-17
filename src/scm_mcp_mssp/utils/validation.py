@@ -21,6 +21,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+try:
+    import jsonschema
+except ImportError:  # optional dependency — validation degrades to a no-op
+    jsonschema = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Schema index — lazy-loaded, cached at module level
 # ---------------------------------------------------------------------------
@@ -120,23 +125,21 @@ def validate_body(endpoint_key: str, body: dict[str, Any]) -> list[str]:
         return []
 
     body_schema = schema.get("requestBody")
-    if not body_schema:
+    if not body_schema or jsonschema is None:
         return []
 
     try:
-        import jsonschema
-
-        jsonschema.validate(instance=body, schema=body_schema)
-    except jsonschema.ValidationError as exc:
-        # Format the error path + message for readability
-        path = " → ".join(str(p) for p in exc.absolute_path) if exc.absolute_path else "(root)"
-        return [f"{path}: {exc.message}"]
+        validator = jsonschema.validators.validator_for(body_schema)(body_schema)
+        errors: list[str] = []
+        for err in validator.iter_errors(body):
+            # Format the error path + message for readability
+            path = " → ".join(str(p) for p in err.absolute_path) if err.absolute_path else "(root)"
+            errors.append(f"{path}: {err.message}")
+        return errors
     except jsonschema.SchemaError as exc:
         return [f"Schema error for {endpoint_key}: {exc.message}"]
     except Exception as exc:
         return [f"Validation error: {exc}"]
-
-    return []
 
 
 def has_schema(endpoint_key: str) -> bool:
@@ -149,7 +152,7 @@ def schema_coverage() -> dict[str, Any]:
     """Return coverage stats for the loaded schema index.
 
     Returns:
-        Dict with ``total_endpoints`` and ``covered_endpoints`` counts.
+        Dict with ``total_endpoints``, the schema file path, and whether it exists.
     """
     index = _load_schema_index()
     return {

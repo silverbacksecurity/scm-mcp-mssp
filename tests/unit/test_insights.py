@@ -186,3 +186,68 @@ class TestDefaultTimeWindow:
         assert rule["operator"] == "last_n_hours"
         assert rule["values"] == [str(DEFAULT_WINDOW_HOURS)]
         assert DEFAULT_WINDOW_HOURS == 24
+
+
+def _invoke_export(session: FakeSession, **kwargs: Any) -> str:
+    mcp = FastMCP("test-insights")
+    the_client = _client(session)
+    register_insights_tools(mcp, get_client=lambda tid="": the_client)
+    tool = mcp._tool_manager.get_tool("scm_insights_export")
+    return tool.fn(**kwargs)
+
+
+class TestExportWorkflow:
+    def test_unknown_action(self) -> None:
+        out = _invoke_export(FakeSession(FakeResponse()), resource="x", action="bogus")
+        assert "Unknown action" in out
+
+    def test_schedule_requires_resource(self) -> None:
+        out = _invoke_export(FakeSession(FakeResponse()), action="schedule")
+        assert "resource is required" in out
+
+    def test_status_requires_download_id(self) -> None:
+        out = _invoke_export(FakeSession(FakeResponse()), action="status")
+        assert "download_id is required" in out
+
+    def test_schedule_v2_path_and_download_id(self) -> None:
+        session = FakeSession(FakeResponse(payload={"download_id": "dl-1"}))
+        out = _invoke_export(session, resource="users/agent/user_list", tenant_id="123")
+        assert session.calls[0]["url"] == (
+            "https://api.sase.paloaltonetworks.com/api/sase/v2.0/resource"
+            "/export/schedule/query/users/agent/user_list"
+        )
+        data = json.loads(out)
+        assert data["download_id"] == "dl-1"
+        assert "status" in data["next_step"]
+
+    def test_schedule_v3_path(self) -> None:
+        session = FakeSession(FakeResponse(payload={"id": "dl-2"}))
+        out = _invoke_export(
+            session, resource="users/agent/user_list", tenant_id="123", api_version="v3"
+        )
+        assert session.calls[0]["url"] == (
+            "https://api.sase.paloaltonetworks.com/insights/v3.0/resource"
+            "/export/query/users/agent/user_list"
+        )
+        assert json.loads(out)["download_id"] == "dl-2"
+
+    def test_status_posts_download_id(self) -> None:
+        session = FakeSession(FakeResponse(payload={"state": "ready"}))
+        out = _invoke_export(session, action="status", download_id="dl-1", tenant_id="123")
+        call = session.calls[0]
+        assert call["url"].endswith("/download/status")
+        assert call["json"] == {"download_id": "dl-1"}
+        assert json.loads(out)["data"] == {"state": "ready"}
+
+    def test_download_posts_download_id(self) -> None:
+        session = FakeSession(FakeResponse(payload={"rows": []}))
+        out = _invoke_export(session, action="download", download_id="dl-1", tenant_id="123")
+        call = session.calls[0]
+        assert call["url"].endswith("/download")
+        assert json.loads(out)["download_id"] == "dl-1"
+
+    def test_schedule_error_passthrough(self) -> None:
+        session = FakeSession(FakeResponse(status_code=403, payload={"error": "no"}))
+        out = _invoke_export(session, resource="users/agent/user_list", tenant_id="123")
+        data = json.loads(out)
+        assert data["error"] == "HTTP 403"
