@@ -17,13 +17,28 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from ..audit.extractor import _bearer_session_for, extract_adem
 from ..audit.insights_extractor import extract_insights
-from ..audit.msr_report import MsrData, in_period, month_bounds, parse_ssr_notes, render_msr_report
+from ..audit.models import AuditSnapshot
+from ..audit.msr_report import (
+    MsrData,
+    fallback_window_days,
+    in_period,
+    merge_bw_allocation,
+    month_bounds,
+    month_window_filter,
+    parse_ssr_notes,
+    render_msr_report,
+    summarize_mu_locations,
+)
 from ..auth.oauth import fetch_licenses
 from ..config.settings import load_all_tenant_configs
 from ..utils.errors import handle_scm_exception
 from ..utils.logging import get_logger
 from .compliance import _compliance_get
+from .insights import _INSIGHTS_BASE_V3, _insights_call, _refresh_token
+from .insights import _REGION_MAP as _INS_REGION_MAP
+from .mt_monitor import _BASE as _MT_BASE
 from .ops import _licence_rows
 from .posture import _incidents_for_tenant
 from .ssr import _get_ssr_config, _resolve_default_folder
@@ -38,6 +53,22 @@ _SSR_OBJECT_RESOURCES = {
     "vulnerability_protection_profile": "vulnerability_protection_profile",
     "ssl_decrypt_exclude_rule": "decryption_rule",
 }
+
+
+def _insights_try(
+    session: Any, path: str, tenant_id: str, body: dict | None, region: str
+) -> tuple[int, Any]:
+    """``_insights_call`` that returns ``(-1, error)`` instead of raising.
+
+    The Insights backend answers HTTP 500 (until urllib3's retry adapter
+    gives up and raises) on filter shapes it can't inline into its SQL
+    template — a failed query attempt must fall through to the fallback
+    window, not abort the section.
+    """
+    try:
+        return _insights_call(session, path, tenant_id, body, region)
+    except Exception as exc:
+        return -1, str(exc)
 
 
 def _resolve_tenant_meta(tenant_id: str) -> tuple[str, str, str, str]:
@@ -164,8 +195,185 @@ def gather_msr_data(
                 )
         except Exception as exc:
             data.errors["bandwidth"] = str(exc)
+
+        # ── Month-window RN bandwidth vs allocation ─────────────────────
+        try:
+            session = getattr(client, "session", None)
+            if session is None:
+                raise RuntimeError("client has no HTTP session")
+            _refresh_token(client)
+            mapped = _INS_REGION_MAP.get(region, "europe")
+            path = f"{_INSIGHTS_BASE_V3}/query/locations/location_rn_bandwidth"
+            status, resp = _insights_try(
+                session, path, tsg_id, month_window_filter(start, end), mapped
+            )
+            window = f"{label} (calendar month)"
+            if status != 200:
+                # Resource rejected the between filter — honest fallback window
+                days = fallback_window_days(start)
+                fb = {
+                    "filter": {
+                        "rules": [
+                            {
+                                "property": "event_time",
+                                "operator": "last_n_days",
+                                "values": [str(days)],
+                            }
+                        ]
+                    }
+                }
+                status, resp = _insights_try(session, path, tsg_id, fb, mapped)
+                window = f"last {days} days (month filter unsupported)"
+            if status != 200:
+                raise RuntimeError(f"HTTP {status}: {str(resp)[:200]}")
+            rows = resp.get("data") if isinstance(resp, dict) else None
+            data.bw_month_rows = list(rows or [])
+            data.bw_month_window = window
+
+            try:
+                allocs = client.bandwidth_allocation.list()
+                data.bw_allocations = [
+                    {
+                        "name": getattr(a, "name", None),
+                        "allocated_mbps": getattr(a, "allocated_bandwidth", None),
+                    }
+                    for a in allocs
+                ]
+            except Exception as alloc_exc:
+                logger.warning("msr_bw_allocations_failed", error=str(alloc_exc))
+
+            data.bw_month_rows = merge_bw_allocation(data.bw_month_rows, data.bw_allocations)
+            data.gathered.append(
+                f"bandwidth vs allocation — {len(data.bw_month_rows)} rows, "
+                f"{len(data.bw_allocations)} allocations ({window})"
+            )
+        except Exception as exc:
+            data.errors["bandwidth_month"] = str(exc)
+
+        # ── Mobile users in period (count + location breakdown) ─────────
+        try:
+            session = getattr(client, "session", None)
+            if session is None:
+                raise RuntimeError("client has no HTTP session")
+            _refresh_token(client)
+            mapped = _INS_REGION_MAP.get(region, "europe")
+            win: dict[str, Any] = month_window_filter(start, end)
+            window = f"{label} (calendar month)"
+            cpath = f"{_INSIGHTS_BASE_V3}/query/users/agent/connected_user_count"
+            status, resp = _insights_try(session, cpath, tsg_id, win, mapped)
+            if status != 200:
+                days = fallback_window_days(start)
+                win = {
+                    "filter": {
+                        "rules": [
+                            {
+                                "property": "event_time",
+                                "operator": "last_n_days",
+                                "values": [str(days)],
+                            }
+                        ]
+                    }
+                }
+                window = f"last {days} days"
+                status, resp = _insights_try(session, cpath, tsg_id, win, mapped)
+            if status == 200 and isinstance(resp, dict):
+                rows = resp.get("data") or []
+                first = rows[0] if rows else {}
+                count = next(
+                    (
+                        v
+                        for v in first.values()
+                        if isinstance(v, int | float) and not isinstance(v, bool)
+                    ),
+                    None,
+                )
+                if count is not None:
+                    data.mu_month_users = int(count)
+                    data.mu_month_window = window
+            # Location breakdown from user_list, with whichever window worked
+            lpath = f"{_INSIGHTS_BASE_V3}/query/users/agent/user_list"
+            lstatus, lresp = _insights_try(session, lpath, tsg_id, win, mapped)
+            if lstatus == 200 and isinstance(lresp, dict):
+                data.mu_month_locations = summarize_mu_locations(lresp.get("data") or [])
+                if not data.mu_month_window:
+                    data.mu_month_window = window
+            if data.mu_month_users is not None or data.mu_month_locations:
+                count_s = data.mu_month_users if data.mu_month_users is not None else "?"
+                data.gathered.append(
+                    f"mobile users — {count_s} unique, "
+                    f"{len(data.mu_month_locations)} location(s) ({window})"
+                )
+            else:
+                data.errors["mobile_users"] = f"HTTP {status} on connected_user_count"
+        except Exception as exc:
+            data.errors["mobile_users"] = str(exc)
     else:
         data.errors["bandwidth"] = "skipped (include_insights=False)"
+        data.errors["bandwidth_month"] = "skipped (include_insights=False)"
+        data.errors["mobile_users"] = "skipped (include_insights=False)"
+
+    # ── ADEM experience snapshot (3-day telemetry window) ───────────────
+    try:
+        snap = AuditSnapshot(folder="", tenant_id=tsg_id)
+        extract_adem(client, snap)
+        if snap.adem_agent_summary:
+            data.adem_summary = {"agents": snap.adem_agent_summary, "errors": snap.adem_errors}
+            data.gathered.append(
+                f"ADEM — {len(snap.adem_agent_summary)} agent scope(s) (3-day window)"
+            )
+        elif snap.adem_errors:
+            data.errors["adem"] = "; ".join(snap.adem_errors[:2])
+    except Exception as exc:
+        data.errors["adem"] = str(exc)
+
+    # ── Blocked security events (Monitor API threat summary) ────────────
+    try:
+        mt_session = _bearer_session_for(client)
+        days = fallback_window_days(start)
+        body = {
+            "filter": {
+                "operator": "AND",
+                "rules": [
+                    {
+                        "operator": "in",
+                        "property": "severity",
+                        "values": ["Critical", "High", "Medium"],
+                    },
+                    {"operator": "last_n_days", "property": "event_time", "values": [days]},
+                ],
+            },
+            "properties": [{"property": "total_threats"}, {"property": "blocked_count"}],
+        }
+        mapped = _INS_REGION_MAP.get(region, "europe")
+        candidates = [mapped, *{"europe": ["uk"], "uk": ["europe"]}.get(mapped, [])]
+        for cand in candidates:
+            resp = mt_session.post(
+                f"{_MT_BASE}/threats/summary",
+                params={"agg_by": "tenant"},
+                headers={"X-PANW-Region": cand},
+                json=body,
+                timeout=(5, 30),
+            )
+            if resp.status_code != 200:
+                continue
+            rows = (resp.json() or {}).get("data") or []
+            if rows:
+                total = sum(r.get("total_threats") or 0 for r in rows)
+                blocked = sum(r.get("blocked_count") or 0 for r in rows)
+                data.threat_summary = {
+                    "total_threats": total,
+                    "blocked_count": blocked,
+                    "window_days": days,
+                }
+                data.gathered.append(
+                    f"security events — {blocked} blocked of {total} threats "
+                    f"(last {days}d, Monitor API)"
+                )
+                break
+        if not data.threat_summary:
+            data.errors["security_events"] = "no threat rows returned (Monitor API)"
+    except Exception as exc:
+        data.errors["security_events"] = str(exc)
 
     # ── Compliance (Silver+; Gold gets the trend annex) ────────────────
     if tier != "bronze":
@@ -210,16 +418,21 @@ def register_msr_tools(mcp: FastMCP, get_client: Any) -> None:
         Assembles the monthly customer deliverable from live tenant data:
 
           1. Executive summary — ranked headline bullets (worst first)
-          2. Service statistics — incidents, MTTR, ack rate, change failure rate
+          2. Service statistics — incidents, MTTR, ack rate, commit count,
+             change failure rate, unique mobile users
           3. Incidents raised in the period (severity-ranked)
           4. Change record — config jobs in period + cumulative SSR ledger
           5. Compliance posture — Silver+ (Gold adds the 30-day score trend)
-          6. Licence & renewal posture — expiries within 180 days, flagged
-          7. Bandwidth consumption — per-location Insights snapshot (24h)
-          8. Data-source coverage — what was gathered vs unavailable
+          6. Licence & renewal posture — expiry countdown within 180 days
+          7. Bandwidth vs allocation — per-RN-location usage over the month
+             compared against the region's allocated bandwidth
+          8. Mobile users — unique logins in period + location breakdown
+          9. Digital experience — ADEM agent scores (3-day telemetry window)
+          10. Security events — threats detected/blocked summary
+          11. Data-source coverage — what was gathered vs unavailable
 
         Every source degrades gracefully: an unavailable API costs one
-        section (disclosed in §8), never the whole pack.
+        section (disclosed in §11), never the whole pack.
 
         Args:
             tenant_id: SCM tenant ID. Defaults to the first configured tenant.

@@ -98,6 +98,152 @@ def parse_ssr_notes(description: str, obj_name: str = "") -> list[dict[str, str]
 
 
 # ---------------------------------------------------------------------------
+# Month-window query bodies (Insights)
+# ---------------------------------------------------------------------------
+
+
+def month_window_filter(start: datetime, end: datetime) -> dict[str, Any]:
+    """Insights filter body bounding ``event_time`` to [start, end).
+
+    Uses the ``between`` operator with second-resolution UTC timestamps.
+    Callers should fall back to a ``last_n_days`` window (and disclose it)
+    if the resource rejects this shape.
+    """
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return {
+        "filter": {
+            "rules": [
+                {
+                    "property": "event_time",
+                    "operator": "between",
+                    "values": [start.strftime(fmt), end.strftime(fmt)],
+                }
+            ]
+        }
+    }
+
+
+def fallback_window_days(start: datetime, now: datetime | None = None) -> int:
+    """Days from *start* to now, clamped to [7, 62] for last_n_days fallbacks."""
+    ref = now or datetime.now(UTC)
+    return max(7, min(62, (ref - start).days + 1))
+
+
+# ---------------------------------------------------------------------------
+# Bandwidth: consumption vs allocation join
+# ---------------------------------------------------------------------------
+
+
+def _norm_loc(name: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(name or "").lower()).strip()
+
+
+_BW_USAGE_KEYS = ("peak_consumption", "max_consumption", "total_consumption", "avg_consumption")
+
+
+def merge_bw_allocation(
+    bw_rows: list[dict[str, Any]], allocations: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Join per-location consumption rows with SCM bandwidth allocations.
+
+    Match is on normalised location name (equality, then containment either
+    way). Adds ``allocated_mbps`` and ``utilisation_pct`` (peak-ish usage ÷
+    allocated) to each consumption row; allocations with no consumption row
+    are appended as allocation-only rows so unused regions still show.
+    """
+    alloc_by_norm = {_norm_loc(a.get("name")): a for a in allocations if a.get("name")}
+    merged: list[dict[str, Any]] = []
+    matched_allocs: set[str] = set()
+
+    for row in bw_rows:
+        out = dict(row)
+        norm = _norm_loc(
+            row.get("location")
+            or row.get("edge_location_display")
+            or row.get("edge_location")
+            or row.get("region")
+            or row.get("name")
+        )
+        alloc = alloc_by_norm.get(norm)
+        if alloc is None and norm:
+            alloc = next(
+                (a for n, a in alloc_by_norm.items() if n and (n in norm or norm in n)),
+                None,
+            )
+        if alloc is not None:
+            matched_allocs.add(_norm_loc(alloc.get("name")))
+            allocated = alloc.get("allocated_mbps")
+            if isinstance(allocated, int | float) and allocated > 0:
+                out["allocated_mbps"] = allocated
+                usage = next(
+                    (
+                        row[k]
+                        for k in _BW_USAGE_KEYS
+                        if isinstance(row.get(k), int | float) and not isinstance(row[k], bool)
+                    ),
+                    None,
+                )
+                if usage is not None:
+                    out["utilisation_pct"] = round(usage / allocated * 100)
+        merged.append(out)
+
+    for norm, alloc in alloc_by_norm.items():
+        if norm not in matched_allocs:
+            merged.append(
+                {
+                    "location": alloc.get("name"),
+                    "allocated_mbps": alloc.get("allocated_mbps"),
+                    "_allocation_only": True,
+                }
+            )
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Mobile users: per-location login breakdown
+# ---------------------------------------------------------------------------
+
+_MU_LOCATION_KEYS = (
+    "pa_location",
+    "location",
+    "source_location",
+    "gw_location",
+    "region",
+    "city",
+    "country",
+)
+
+
+def summarize_mu_locations(rows: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Count unique users per location from Insights user_list rows.
+
+    The first location-ish key present in the rows is used consistently;
+    users deduplicate by username-ish key when one exists (a user connecting
+    twice from one location counts once), else rows are counted.
+    """
+    loc_key = next((k for k in _MU_LOCATION_KEYS if any(r.get(k) for r in rows)), None)
+    if loc_key is None:
+        return []
+    user_key = next(
+        (
+            k
+            for k in ("user", "username", "user_name", "source_user")
+            if any(r.get(k) for r in rows)
+        ),
+        None,
+    )
+    per_loc: dict[str, set[str] | int] = {}
+    for i, r in enumerate(rows):
+        loc = str(r.get(loc_key) or "Unknown")
+        if user_key:
+            per_loc.setdefault(loc, set()).add(str(r.get(user_key) or f"row{i}"))  # type: ignore[union-attr]
+        else:
+            per_loc[loc] = int(per_loc.get(loc) or 0) + 1  # type: ignore[arg-type]
+    counts = {loc: (len(v) if isinstance(v, set) else v) for loc, v in per_loc.items()}
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+# ---------------------------------------------------------------------------
 # Service stats (mechanical, from timestamps we already hold)
 # ---------------------------------------------------------------------------
 
@@ -138,8 +284,10 @@ def compute_service_stats(
 
     ok_jobs = sum(1 for j in jobs if str(j.get("result") or "").upper() == "OK")
     failed_jobs = sum(1 for j in jobs if str(j.get("result") or "").upper() == "FAIL")
+    commit_jobs = sum(1 for j in jobs if "commit" in str(j.get("type") or "").lower())
 
     return {
+        "commit_count": commit_jobs,
         "incident_total": len(incidents),
         "severity_counts": sev_counts,
         "open_at_generation": open_count,
@@ -179,6 +327,16 @@ class MsrData:
     compliance_summaries: list[dict[str, Any]] = field(default_factory=list)
     compliance_timeline: list[dict[str, Any]] = field(default_factory=list)  # 30d entries
     compliance_framework_name: str = ""
+
+    # Month-window additions (2026-07-18)
+    bw_month_rows: list[dict[str, Any]] = field(default_factory=list)  # RN bandwidth, period
+    bw_month_window: str = ""  # disclosure of the window actually used
+    bw_allocations: list[dict[str, Any]] = field(default_factory=list)  # SCM allocations
+    mu_month_users: int | None = None  # unique MU logins in window
+    mu_month_locations: list[tuple[str, int]] = field(default_factory=list)  # (location, users)
+    mu_month_window: str = ""
+    adem_summary: dict[str, Any] = field(default_factory=dict)  # agent scores, 3d snapshot
+    threat_summary: dict[str, Any] = field(default_factory=dict)  # blocked-event counts
 
     # source name → error string; sources absent from BOTH this and `gathered`
     # were not attempted (e.g. compliance below gold tier)
@@ -272,9 +430,26 @@ def _exec_summary(data: MsrData, stats: dict[str, Any]) -> list[str]:
                 f"🟡 **Compliance score declined** {first:.0f} → {last:.0f}"
                 f" ({data.compliance_framework_name or 'benchmarked framework'}, 30d)."
             )
+    hot = [
+        r
+        for r in data.bw_month_rows
+        if isinstance(r.get("utilisation_pct"), int | float) and r["utilisation_pct"] >= 90
+    ]
+    if hot:
+        worst = max(hot, key=lambda r: r["utilisation_pct"])
+        bullets.append(
+            f"🟠 **{len(hot)} remote-network location(s) at ≥90% of allocated bandwidth**"
+            f" (worst: {_bw_name(worst)} at {worst['utilisation_pct']}%) — see Bandwidth."
+        )
     if not bullets:
         bullets.append(
             "🟢 No critical incidents, failed changes, or expiring licences this period."
+        )
+    blocked = data.threat_summary.get("blocked_count")
+    if isinstance(blocked, int | float) and blocked >= 0:
+        bullets.append(
+            f"ℹ️ **{int(blocked)} security threat(s) blocked**"
+            f" over the last {data.threat_summary.get('window_days', '—')} days."
         )
     if stats["mttr_hours"] is not None:
         bullets.append(
@@ -325,8 +500,13 @@ def render_msr_report(data: MsrData) -> str:  # noqa: C901
         f"| Acknowledgement rate | {ack} |",
         f"| MTTR (closed incidents) | {mttr} |",
         f"| Config jobs | {stats['change_total']} ({stats['change_ok']} OK, {stats['change_failed']} failed) |",
+        f"| Commit jobs | {stats['commit_count']} |",
         f"| Change failure rate | {cfr} |",
     ]
+    if data.mu_month_users is not None:
+        lines.append(
+            f"| Unique mobile users ({data.mu_month_window or 'period'}) | {data.mu_month_users} |"
+        )
     if data.connected_mu is not None and data.connected_mu >= 0:
         lines.append(f"| Connected mobile users (at generation) | {data.connected_mu} |")
 
@@ -470,15 +650,46 @@ def render_msr_report(data: MsrData) -> str:  # noqa: C901
         lines.append("No licence data returned.")
 
     # ── 7. Bandwidth ────────────────────────────────────────────────────
-    lines += ["", "## 7. Bandwidth Consumption", ""]
-    if "bandwidth" in data.errors:
-        lines.append(f"> ⚠️ Bandwidth data unavailable: {data.errors['bandwidth']}")
+    lines += ["", "## 7. Bandwidth Consumption vs Allocation", ""]
+    if data.bw_month_rows:
+        cols = _bw_columns(data.bw_month_rows)
+        # Keep the comparison columns at the end, in a fixed order
+        for special in ("allocated_mbps", "utilisation_pct"):
+            if special in cols:
+                cols.remove(special)
+            if any(special in r for r in data.bw_month_rows):
+                cols.append(special)
+        header = " | ".join(c.replace("_", " ").title() for c in cols)
+        lines += [
+            f"_Per remote-network location over **{data.bw_month_window or data.period_label}**,"
+            " compared against the allocated bandwidth for its aggregate region"
+            " (Insights + SCM bandwidth allocations)._",
+            "",
+            f"| Location | {header} |",
+            "|" + "---|" * (len(cols) + 1),
+        ]
+        for row in data.bw_month_rows[:40]:
+            vals: list[str] = []
+            for c in cols:
+                v = row.get(c, "—")
+                if c == "utilisation_pct" and isinstance(v, int | float):
+                    flag = " 🔴" if v >= 90 else " 🟠" if v >= 75 else ""
+                    vals.append(f"{v}%{flag}")
+                else:
+                    vals.append(str(v))
+            suffix = " _(allocation only — no traffic rows)_" if row.get("_allocation_only") else ""
+            lines.append(f"| {_bw_name(row)}{suffix} | {' | '.join(vals)} |")
+        if "bandwidth" in data.errors:
+            lines.append("")
+            lines.append(f"> ⚠️ 24h snapshot source also reported: {data.errors['bandwidth']}")
+    elif "bandwidth_month" in data.errors and not data.bandwidth_rows:
+        lines.append(f"> ⚠️ Bandwidth data unavailable: {data.errors['bandwidth_month']}")
     elif data.bandwidth_rows:
         cols = _bw_columns(data.bandwidth_rows)
         header = " | ".join(c.replace("_", " ").title() for c in cols)
         lines += [
             "_Per-location snapshot from the Insights API (24-hour window at"
-            " generation time — not a month aggregate)._",
+            " generation time — the month-window query was unavailable)._",
             "",
             f"| Location | {header} |",
             "|" + "---|" * (len(cols) + 1),
@@ -486,11 +697,85 @@ def render_msr_report(data: MsrData) -> str:  # noqa: C901
         for row in data.bandwidth_rows[:40]:
             vals = " | ".join(str(row.get(c, "—")) for c in cols)
             lines.append(f"| {_bw_name(row)} | {vals} |")
+    elif "bandwidth" in data.errors:
+        lines.append(f"> ⚠️ Bandwidth data unavailable: {data.errors['bandwidth']}")
     else:
         lines.append("No per-location bandwidth data returned.")
 
-    # ── 8. Data sources ─────────────────────────────────────────────────
-    lines += ["", "## 8. Data Sources & Coverage", ""]
+    # ── 8. Mobile users ─────────────────────────────────────────────────
+    lines += ["", "## 8. Mobile Users", ""]
+    if data.mu_month_users is not None or data.mu_month_locations:
+        if data.mu_month_users is not None:
+            lines.append(
+                f"**{data.mu_month_users} unique mobile user(s)** connected over"
+                f" {data.mu_month_window or 'the period window'}."
+            )
+        if data.mu_month_locations:
+            lines += [
+                "",
+                "| Location | Users |",
+                "|---|---|",
+            ]
+            for loc, count in data.mu_month_locations[:25]:
+                lines.append(f"| {loc} | {count} |")
+            if len(data.mu_month_locations) > 25:
+                lines.append(f"| ... | *({len(data.mu_month_locations) - 25} more locations)* |")
+    elif "mobile_users" in data.errors:
+        lines.append(f"> ⚠️ Mobile-user data unavailable: {data.errors['mobile_users']}")
+    else:
+        lines.append("No mobile-user login data returned for the period.")
+
+    # ── 9. Digital experience (ADEM) ────────────────────────────────────
+    lines += ["", "## 9. Digital Experience (ADEM)", ""]
+    agents = data.adem_summary.get("agents") or {}
+    if agents:
+        lines += [
+            "_Experience scores from Autonomous DEM (3-day window at generation"
+            " time — ADEM telemetry does not retain a month of history)._",
+            "",
+            "| Scope | Score | Clients | Good | Fair | Poor |",
+            "|---|---|---|---|---|---|",
+        ]
+        labels = {"muAgent": "Mobile Users", "rnAgent": "Remote Networks"}
+        for ep_type, s in agents.items():
+            score = s.get("score")
+            score_s = f"{score:.0f}" if isinstance(score, int | float) else "—"
+            lines.append(
+                f"| {labels.get(ep_type, ep_type)} | {score_s} | {s.get('clients') or 0} "
+                f"| {s.get('clients_good') if s.get('clients_good') is not None else '—'} "
+                f"| {s.get('clients_fair') if s.get('clients_fair') is not None else '—'} "
+                f"| {s.get('clients_poor') if s.get('clients_poor') is not None else '—'} |"
+            )
+    elif "adem" in data.errors:
+        lines.append(f"> ⚠️ ADEM data unavailable: {data.errors['adem']}")
+    else:
+        lines.append(
+            "No ADEM telemetry returned — the tenant may not have ADEM licensed"
+            " or the service account lacks the ADEM scope."
+        )
+
+    # ── 10. Security events ─────────────────────────────────────────────
+    lines += ["", "## 10. Security Events", ""]
+    ts = data.threat_summary
+    if ts:
+        total = ts.get("total_threats")
+        blocked = ts.get("blocked_count")
+        lines += [
+            f"_Threat activity over the last **{ts.get('window_days', '—')} days**"
+            " (Critical/High/Medium, Monitor API)._",
+            "",
+            "| Metric | Count |",
+            "|---|---|",
+            f"| Threats detected | {int(total) if isinstance(total, int | float) else '—'} |",
+            f"| Threats blocked | {int(blocked) if isinstance(blocked, int | float) else '—'} |",
+        ]
+    elif "security_events" in data.errors:
+        lines.append(f"> ⚠️ Security-event data unavailable: {data.errors['security_events']}")
+    else:
+        lines.append("No threat summary returned for this tenant.")
+
+    # ── 11. Data sources ────────────────────────────────────────────────
+    lines += ["", "## 11. Data Sources & Coverage", ""]
     for src in data.gathered:
         lines.append(f"- ✅ {src}")
     for src, err in data.errors.items():

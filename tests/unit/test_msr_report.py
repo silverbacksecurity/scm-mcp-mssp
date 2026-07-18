@@ -313,6 +313,20 @@ class TestGather:
         client.list_jobs.return_value = MagicMock(data=jobs)
         return client
 
+    @staticmethod
+    def _ext_patches() -> list:
+        """Patches for the external calls added 2026-07-18 (ADEM, Monitor API,
+        Insights month-window) so gather tests never touch the network."""
+        return [
+            patch("scm_mcp_mssp.tools.msr.extract_adem", side_effect=lambda c, s: s),
+            patch(
+                "scm_mcp_mssp.tools.msr._bearer_session_for",
+                side_effect=RuntimeError("no mt session"),
+            ),
+            patch("scm_mcp_mssp.tools.msr._insights_call", return_value=(403, "denied")),
+            patch("scm_mcp_mssp.tools.msr._refresh_token", return_value=None),
+        ]
+
     def test_period_filtering_and_degradation(self) -> None:
         from scm_mcp_mssp.tools.msr import gather_msr_data
 
@@ -323,18 +337,28 @@ class TestGather:
         jobs = [_mock_job("2026-06-05 10:00:00"), _mock_job("2026-07-05 10:00:00")]
         client = self._client(incidents, jobs)
         # Licence + insights + compliance calls fail → degradation, not raise
-        with (
-            patch(
-                "scm_mcp_mssp.tools.msr.fetch_licenses", side_effect=RuntimeError("licence boom")
-            ),
-            patch("scm_mcp_mssp.tools.msr.extract_insights", side_effect=RuntimeError("ins boom")),
-            patch("scm_mcp_mssp.tools.msr._compliance_get", side_effect=RuntimeError("comp boom")),
-            patch(
-                "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
-                return_value=("T", "t-1", "gold", "uk"),
-            ),
-            patch("scm_mcp_mssp.tools.msr._get_ssr_config", return_value={}),
-        ):
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                patch(
+                    "scm_mcp_mssp.tools.msr.fetch_licenses",
+                    side_effect=RuntimeError("licence boom"),
+                ),
+                patch(
+                    "scm_mcp_mssp.tools.msr.extract_insights", side_effect=RuntimeError("ins boom")
+                ),
+                patch(
+                    "scm_mcp_mssp.tools.msr._compliance_get", side_effect=RuntimeError("comp boom")
+                ),
+                patch(
+                    "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
+                    return_value=("T", "t-1", "gold", "uk"),
+                ),
+                patch("scm_mcp_mssp.tools.msr._get_ssr_config", return_value={}),
+                *self._ext_patches(),
+            ]:
+                stack.enter_context(p)
             data = gather_msr_data(client, tenant_id="t-1", month="2026-06")
 
         assert len(data.incidents) == 1
@@ -350,15 +374,20 @@ class TestGather:
         from scm_mcp_mssp.tools.msr import gather_msr_data
 
         client = self._client([], [])
-        with (
-            patch("scm_mcp_mssp.tools.msr.fetch_licenses", return_value=[]),
-            patch("scm_mcp_mssp.tools.msr._compliance_get") as comp,
-            patch(
-                "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
-                return_value=("T", "t-1", "bronze", "eu"),
-            ),
-            patch("scm_mcp_mssp.tools.msr._get_ssr_config", return_value={}),
-        ):
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            comp = stack.enter_context(patch("scm_mcp_mssp.tools.msr._compliance_get"))
+            for p in [
+                patch("scm_mcp_mssp.tools.msr.fetch_licenses", return_value=[]),
+                patch(
+                    "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
+                    return_value=("T", "t-1", "bronze", "eu"),
+                ),
+                patch("scm_mcp_mssp.tools.msr._get_ssr_config", return_value={}),
+                *self._ext_patches(),
+            ]:
+                stack.enter_context(p)
             data = gather_msr_data(client, month="2026-06", include_insights=False)
         comp.assert_not_called()
         assert "compliance" not in data.errors
@@ -372,19 +401,451 @@ class TestGather:
             "description": "SSR add: example.com — INC-1 | SSR add: foo.example — INC-2"
         }
         client.url_category.fetch.return_value = obj
-        with (
-            patch("scm_mcp_mssp.tools.msr.fetch_licenses", return_value=[]),
-            patch(
-                "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
-                return_value=("T", "t-1", "bronze", "eu"),
-            ),
-            patch(
-                "scm_mcp_mssp.tools.msr._get_ssr_config",
-                return_value={"url_allow_list": "SSR-Allow"},
-            ),
-            patch("scm_mcp_mssp.tools.msr._resolve_default_folder", return_value="Shared"),
-        ):
+        import contextlib
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                patch("scm_mcp_mssp.tools.msr.fetch_licenses", return_value=[]),
+                patch(
+                    "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
+                    return_value=("T", "t-1", "bronze", "eu"),
+                ),
+                patch(
+                    "scm_mcp_mssp.tools.msr._get_ssr_config",
+                    return_value={"url_allow_list": "SSR-Allow"},
+                ),
+                patch("scm_mcp_mssp.tools.msr._resolve_default_folder", return_value="Shared"),
+                *self._ext_patches(),
+            ]:
+                stack.enter_context(p)
             data = gather_msr_data(client, month="2026-06", include_insights=False)
         assert len(data.ssr_ledger) == 2
         assert data.ssr_ledger[0]["object"] == "SSR-Allow"
         assert data.ssr_ledger[1]["ticket_ref"] == "INC-2"
+
+
+# ---------------------------------------------------------------------------
+# Month-window additions (2026-07-18)
+# ---------------------------------------------------------------------------
+
+
+class TestMonthWindow:
+    def test_between_filter_bounds(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import month_bounds, month_window_filter
+
+        start, end, _ = month_bounds("2026-06")
+        body = month_window_filter(start, end)
+        rule = body["filter"]["rules"][0]
+        assert rule["operator"] == "between"
+        assert rule["property"] == "event_time"
+        assert rule["values"] == ["2026-06-01 00:00:00", "2026-07-01 00:00:00"]
+
+    def test_fallback_days_clamped(self) -> None:
+        from datetime import UTC, datetime
+
+        from scm_mcp_mssp.audit.msr_report import fallback_window_days
+
+        now = datetime(2026, 7, 18, tzinfo=UTC)
+        assert fallback_window_days(datetime(2026, 7, 17, tzinfo=UTC), now) == 7  # floor
+        assert fallback_window_days(datetime(2026, 6, 1, tzinfo=UTC), now) == 48
+        assert fallback_window_days(datetime(2025, 1, 1, tzinfo=UTC), now) == 62  # ceiling
+
+
+class TestMergeBwAllocation:
+    def test_exact_match_adds_utilisation(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import merge_bw_allocation
+
+        rows = [{"location": "UK South", "peak_consumption": 90.0}]
+        allocs = [{"name": "uk-south", "allocated_mbps": 100}]
+        merged = merge_bw_allocation(rows, allocs)
+        assert merged[0]["allocated_mbps"] == 100
+        assert merged[0]["utilisation_pct"] == 90
+
+    def test_containment_match(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import merge_bw_allocation
+
+        rows = [{"location": "Frankfurt DE", "total_consumption": 25.0}]
+        allocs = [{"name": "Frankfurt", "allocated_mbps": 50}]
+        merged = merge_bw_allocation(rows, allocs)
+        assert merged[0]["utilisation_pct"] == 50
+
+    def test_unmatched_allocation_appended(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import merge_bw_allocation
+
+        merged = merge_bw_allocation([], [{"name": "us-east", "allocated_mbps": 200}])
+        assert len(merged) == 1
+        assert merged[0]["_allocation_only"] is True
+        assert merged[0]["allocated_mbps"] == 200
+
+    def test_no_allocation_leaves_row_untouched(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import merge_bw_allocation
+
+        rows = [{"location": "Tokyo", "peak_consumption": 10.0}]
+        merged = merge_bw_allocation(rows, [])
+        assert "allocated_mbps" not in merged[0]
+        assert "utilisation_pct" not in merged[0]
+
+
+class TestMuLocations:
+    def test_dedups_users_per_location(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import summarize_mu_locations
+
+        rows = [
+            {"user": "alice", "pa_location": "London"},
+            {"user": "alice", "pa_location": "London"},  # reconnect — counts once
+            {"user": "bob", "pa_location": "London"},
+            {"user": "carol", "pa_location": "Paris"},
+        ]
+        assert summarize_mu_locations(rows) == [("London", 2), ("Paris", 1)]
+
+    def test_counts_rows_without_user_key(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import summarize_mu_locations
+
+        rows = [{"location": "Berlin"}, {"location": "Berlin"}]
+        assert summarize_mu_locations(rows) == [("Berlin", 2)]
+
+    def test_no_location_key_returns_empty(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import summarize_mu_locations
+
+        assert summarize_mu_locations([{"user": "alice"}]) == []
+
+
+class TestCommitCount:
+    def test_commit_jobs_counted(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import compute_service_stats
+
+        jobs = [
+            {"type": "CommitAndPush", "result": "OK"},
+            {"type": "commit", "result": "OK"},
+            {"type": "Validate", "result": "OK"},
+        ]
+        stats = compute_service_stats([], jobs)
+        assert stats["commit_count"] == 2
+
+
+class TestNewSectionsRender:
+    def _base(self, **kwargs):
+        from scm_mcp_mssp.audit.msr_report import MsrData
+
+        return MsrData(tenant_label="T", tier="gold", period_label="2026-06", **kwargs)
+
+    def test_bw_month_table_with_utilisation_flags(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        data = self._base(
+            bw_month_rows=[
+                {
+                    "location": "UK South",
+                    "peak_consumption": 95.0,
+                    "allocated_mbps": 100,
+                    "utilisation_pct": 95,
+                },
+                {"location": "us-east", "allocated_mbps": 200, "_allocation_only": True},
+            ],
+            bw_month_window="2026-06 (calendar month)",
+        )
+        md = render_msr_report(data)
+        assert "## 7. Bandwidth Consumption vs Allocation" in md
+        assert "95% 🔴" in md
+        assert "allocation only" in md
+        assert "at ≥90% of allocated bandwidth" in md  # exec bullet
+        assert "2026-06 (calendar month)" in md
+
+    def test_bw_falls_back_to_snapshot_when_month_unavailable(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        data = self._base(
+            bandwidth_rows=[{"location": "UK", "total_consumption": 5.0}],
+        )
+        data.errors["bandwidth_month"] = "HTTP 400"
+        md = render_msr_report(data)
+        assert "24-hour window" in md
+        assert "month-window query was unavailable" in md
+
+    def test_mu_section_renders_count_and_breakdown(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        data = self._base(
+            mu_month_users=42,
+            mu_month_window="2026-06 (calendar month)",
+            mu_month_locations=[("London", 30), ("Paris", 12)],
+        )
+        md = render_msr_report(data)
+        assert "## 8. Mobile Users" in md
+        assert "**42 unique mobile user(s)**" in md
+        assert "| London | 30 |" in md
+        assert "| Unique mobile users (2026-06 (calendar month)) | 42 |" in md  # stats row
+
+    def test_adem_section_renders_scores(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        data = self._base(
+            adem_summary={
+                "agents": {
+                    "muAgent": {
+                        "score": 87.0,
+                        "clients": 10,
+                        "clients_good": 8,
+                        "clients_fair": 1,
+                        "clients_poor": 1,
+                    },
+                }
+            }
+        )
+        md = render_msr_report(data)
+        assert "## 9. Digital Experience (ADEM)" in md
+        assert "| Mobile Users | 87 | 10 | 8 | 1 | 1 |" in md
+        assert "3-day window" in md
+
+    def test_security_events_section_and_bullet(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        data = self._base(
+            threat_summary={"total_threats": 120, "blocked_count": 118, "window_days": 30}
+        )
+        md = render_msr_report(data)
+        assert "## 10. Security Events" in md
+        assert "| Threats detected | 120 |" in md
+        assert "| Threats blocked | 118 |" in md
+        assert "**118 security threat(s) blocked**" in md  # exec bullet
+
+    def test_commit_row_in_stats(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        data = self._base(
+            jobs=[{"type": "CommitAndPush", "result": "OK", "start_ts": "2026-06-05 10:00:00"}]
+        )
+        md = render_msr_report(data)
+        assert "| Commit jobs | 1 |" in md
+
+    def test_sources_section_renumbered(self) -> None:
+        from scm_mcp_mssp.audit.msr_report import render_msr_report
+
+        md = render_msr_report(self._base())
+        assert "## 11. Data Sources & Coverage" in md
+
+
+class TestGatherMonthAdditions:
+    def _client(self) -> MagicMock:
+        client = MagicMock()
+        resp = MagicMock()
+        resp.json.return_value = {"data": []}
+        resp.raise_for_status.return_value = None
+        client.session.post.return_value = resp
+        client.list_jobs.return_value = MagicMock(data=[])
+        return client
+
+    def _base_patches(self) -> list:
+        return [
+            patch("scm_mcp_mssp.tools.msr.fetch_licenses", return_value=[]),
+            patch(
+                "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
+                return_value=("T", "t-1", "bronze", "uk"),
+            ),
+            patch("scm_mcp_mssp.tools.msr._get_ssr_config", return_value={}),
+            patch("scm_mcp_mssp.tools.msr._refresh_token", return_value=None),
+            patch(
+                "scm_mcp_mssp.tools.msr.extract_insights",
+                return_value=MagicMock(
+                    location_rn_bandwidth=[],
+                    location_sc_bandwidth=[],
+                    connected_mu_count=-1,
+                    errors=[],
+                ),
+            ),
+        ]
+
+    def test_month_bandwidth_merged_and_gathered(self) -> None:
+        import contextlib
+
+        from scm_mcp_mssp.tools.msr import gather_msr_data
+
+        client = self._client()
+        client.bandwidth_allocation.list.return_value = [
+            MagicMock(name_attr="x", **{"name": "uk-south", "allocated_bandwidth": 100})
+        ]
+
+        def fake_call(session, path, tenant_id, body, region):
+            if "location_rn_bandwidth" in path:
+                assert body["filter"]["rules"][0]["operator"] == "between"
+                return 200, {"data": [{"location": "UK South", "peak_consumption": 91.0}]}
+            return 404, "nope"
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                *self._base_patches(),
+                patch("scm_mcp_mssp.tools.msr._insights_call", side_effect=fake_call),
+                patch("scm_mcp_mssp.tools.msr.extract_adem", side_effect=lambda c, s: s),
+                patch(
+                    "scm_mcp_mssp.tools.msr._bearer_session_for",
+                    side_effect=RuntimeError("no mt"),
+                ),
+            ]:
+                stack.enter_context(p)
+            data = gather_msr_data(client, month="2026-06")
+
+        assert data.bw_month_window == "2026-06 (calendar month)"
+        row = data.bw_month_rows[0]
+        assert row["allocated_mbps"] == 100
+        assert row["utilisation_pct"] == 91
+        assert any("bandwidth vs allocation" in g for g in data.gathered)
+
+    def test_month_filter_rejected_falls_back_to_last_n_days(self) -> None:
+        import contextlib
+
+        from scm_mcp_mssp.tools.msr import gather_msr_data
+
+        client = self._client()
+        client.bandwidth_allocation.list.return_value = []
+        calls: list[dict] = []
+
+        def fake_call(session, path, tenant_id, body, region):
+            if "location_rn_bandwidth" not in path:
+                return 404, "nope"
+            calls.append(body)
+            op = body["filter"]["rules"][0]["operator"]
+            if op == "between":
+                return 400, "Syntax error"
+            return 200, {"data": [{"location": "UK", "peak_consumption": 1.0}]}
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                *self._base_patches(),
+                patch("scm_mcp_mssp.tools.msr._insights_call", side_effect=fake_call),
+                patch("scm_mcp_mssp.tools.msr.extract_adem", side_effect=lambda c, s: s),
+                patch(
+                    "scm_mcp_mssp.tools.msr._bearer_session_for",
+                    side_effect=RuntimeError("no mt"),
+                ),
+            ]:
+                stack.enter_context(p)
+            data = gather_msr_data(client, month="2026-06")
+
+        assert len(calls) == 2
+        assert calls[1]["filter"]["rules"][0]["operator"] == "last_n_days"
+        assert "month filter unsupported" in data.bw_month_window
+
+    def test_mobile_users_count_and_breakdown(self) -> None:
+        import contextlib
+
+        from scm_mcp_mssp.tools.msr import gather_msr_data
+
+        client = self._client()
+        client.bandwidth_allocation.list.return_value = []
+
+        def fake_call(session, path, tenant_id, body, region):
+            if "connected_user_count" in path:
+                return 200, {"data": [{"connected_user_count": 42}]}
+            if "user_list" in path:
+                return 200, {
+                    "data": [
+                        {"user": "alice", "pa_location": "London"},
+                        {"user": "bob", "pa_location": "London"},
+                    ]
+                }
+            return 404, "nope"
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                *self._base_patches(),
+                patch("scm_mcp_mssp.tools.msr._insights_call", side_effect=fake_call),
+                patch("scm_mcp_mssp.tools.msr.extract_adem", side_effect=lambda c, s: s),
+                patch(
+                    "scm_mcp_mssp.tools.msr._bearer_session_for",
+                    side_effect=RuntimeError("no mt"),
+                ),
+            ]:
+                stack.enter_context(p)
+            data = gather_msr_data(client, month="2026-06")
+
+        assert data.mu_month_users == 42
+        assert data.mu_month_locations == [("London", 2)]
+
+    def test_adem_and_threats_gathered(self) -> None:
+        import contextlib
+
+        from scm_mcp_mssp.tools.msr import gather_msr_data
+
+        client = self._client()
+        client.bandwidth_allocation.list.return_value = []
+
+        def fake_adem(c, snap):
+            snap.adem_agent_summary["muAgent"] = {"score": 90, "clients": 5}
+            return snap
+
+        mt_resp = MagicMock()
+        mt_resp.status_code = 200
+        mt_resp.json.return_value = {"data": [{"total_threats": 10, "blocked_count": 9}]}
+        mt_session = MagicMock()
+        mt_session.post.return_value = mt_resp
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                *self._base_patches(),
+                patch("scm_mcp_mssp.tools.msr._insights_call", return_value=(404, "nope")),
+                patch("scm_mcp_mssp.tools.msr.extract_adem", side_effect=fake_adem),
+                patch("scm_mcp_mssp.tools.msr._bearer_session_for", return_value=mt_session),
+            ]:
+                stack.enter_context(p)
+            data = gather_msr_data(client, month="2026-06")
+
+        assert data.adem_summary["agents"]["muAgent"]["score"] == 90
+        assert data.threat_summary["blocked_count"] == 9
+        assert data.threat_summary["total_threats"] == 10
+        assert mt_session.post.call_args.kwargs["params"] == {"agg_by": "tenant"}
+
+
+class TestInsightsTryGuard:
+    def test_transport_exception_falls_back_to_last_n_days(self) -> None:
+        """The Insights backend 500s (and the retry adapter raises) on the
+        between filter for some tenants — the fallback window must engage
+        on the exception, not only on a 4xx status."""
+        import contextlib
+
+        from scm_mcp_mssp.tools.msr import gather_msr_data
+
+        client = MagicMock()
+        resp = MagicMock()
+        resp.json.return_value = {"data": []}
+        client.session.post.return_value = resp
+        client.list_jobs.return_value = MagicMock(data=[])
+        client.bandwidth_allocation.list.return_value = []
+
+        def fake_call(session, path, tenant_id, body, region):
+            if "location_rn_bandwidth" not in path:
+                return 404, "nope"
+            if body["filter"]["rules"][0]["operator"] == "between":
+                raise RuntimeError("too many 500 error responses")
+            return 200, {"data": [{"location": "UK", "peak_consumption": 2.0}]}
+
+        with contextlib.ExitStack() as stack:
+            for p in [
+                patch("scm_mcp_mssp.tools.msr.fetch_licenses", return_value=[]),
+                patch(
+                    "scm_mcp_mssp.tools.msr._resolve_tenant_meta",
+                    return_value=("T", "t-1", "bronze", "uk"),
+                ),
+                patch("scm_mcp_mssp.tools.msr._get_ssr_config", return_value={}),
+                patch("scm_mcp_mssp.tools.msr._refresh_token", return_value=None),
+                patch(
+                    "scm_mcp_mssp.tools.msr.extract_insights",
+                    return_value=MagicMock(
+                        location_rn_bandwidth=[],
+                        location_sc_bandwidth=[],
+                        connected_mu_count=-1,
+                        errors=[],
+                    ),
+                ),
+                patch("scm_mcp_mssp.tools.msr._insights_call", side_effect=fake_call),
+                patch("scm_mcp_mssp.tools.msr.extract_adem", side_effect=lambda c, s: s),
+                patch(
+                    "scm_mcp_mssp.tools.msr._bearer_session_for",
+                    side_effect=RuntimeError("no mt"),
+                ),
+            ]:
+                stack.enter_context(p)
+            data = gather_msr_data(client, month="2026-06")
+
+        assert "bandwidth_month" not in data.errors
+        assert data.bw_month_rows[0]["location"] == "UK"
+        assert "month filter unsupported" in data.bw_month_window

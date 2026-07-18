@@ -230,10 +230,16 @@ testing._
   Insights bandwidth snapshot, mechanical MTTR/ack-rate/change-failure stats,
   ranked executive summary, per-section degradation with coverage disclosure,
   markdown/DOCX output. Live-validated bronze + gold paths incl. real DOCX.
-  Follow-ups when useful: a Slides/deck variant for the customer meeting, a
-  `scm-planner-nightly`-style console script dropping the whole estate's
-  packs on the 1st of the month, and month-window (vs 24h snapshot)
-  bandwidth aggregation once an Insights query shape for it is validated.
+  **Extended 2026-07-18**: RN bandwidth-vs-allocation comparison (Insights
+  month window with honest last-N-days fallback — the v3 backend rejects a
+  `between` filter — joined against SCM bandwidth allocations, with
+  utilisation % and ≥90% exec-summary flag), unique mobile users in period
+  + per-location breakdown, ADEM experience score summary (3-day telemetry
+  window), commit-job count, and a threats detected/blocked security-events
+  section from the Monitor API. Live-validated on both lab tenants.
+  Follow-ups when useful: a Slides/deck variant for the customer meeting and
+  a `scm-planner-nightly`-style console script dropping the whole estate's
+  packs on the 1st of the month.
 - ✅ **SD-WAN Depth Round 3** — shipped 2026-07-17.  7 new tools: `sdwan_app_qos`,
   `sdwan_interface_status`, `sdwan_ipfix_config`, `sdwan_snmp_config`,
   `sdwan_event_correlation`, `sdwan_perf_mgmt`, `sdwan_events_summary`.
