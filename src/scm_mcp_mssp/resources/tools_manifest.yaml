@@ -520,6 +520,18 @@ scm_insights_query:
     (e.g. tunnels/tunnel_list, auditlog) 403 on view-only service accounts; data may
     live in a different CDL region than the tenant''s insights_region claims. Body must
     match the resource''s expected query schema or the API 400s.'
+scm_adem_query:
+  access: read
+  domain: operational_health
+  scope: tenant
+  idempotent: true
+  retry_policy: retry
+  known_failure_modes: 'Generic ADEM telemetry query surface over 13 views -
+    a 401 usually means the tenant lacks the ADEM entitlement or the service
+    account lacks the adem OAuth scope, not a bad token. Per-view parameter
+    support (endpoint-type, response-type enums, filter requirements) varies
+    across endpoints; agent_properties and route_hops need a filter naming a
+    real agent_uuid/site_id/probe_uuid or they 400.'
 scm_ipsec_tunnel_list:
   access: read
   domain: deployment

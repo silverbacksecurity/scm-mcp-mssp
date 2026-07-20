@@ -260,19 +260,21 @@ testing._
   `_report` cover the summary and report paths; the two POST paths (tenant
   creation, user-group creation) are deliberately excluded as writes.
   `auth_profile` is read-only and was just missed — small addition, no blocker.
-- **ADEM path enrichment** (`access/adem`, 13 paths) — **unblocked 2026-07-20**.
-  A lab tenant is ADEM-licensed (`add_adem_aiops`, both MU and RN, via its
-  SCM Pro entitlement) and API-reachable: live-tested all 11 paths
-  `extract_adem` doesn't yet use (only `measure/application/score` and
-  `measure/agent/score` are wired up today) — zero 401/403 across the board.
-  `measure/application/metric`, `measure/internet/metric`, `measure/rum/metric`,
-  and `measure/rum/score` returned real `200`s with tenant-scoped data; the
-  rest 400'd only on missing/wrong params for a quick smoke test (`agent/properties`
-  needs a `filter`, `measure/route/hops` needs `agent_uuid`/`site_id`/`probe_uuid`,
-  `measure/agent/metric`/`nav/traffic`/`zoom/qos` need the exact `response-type`
-  enum per the spec, `zoom/participant` rejected an unrecognized param) —
-  normal integration work against the real schema, not a licensing gap.
-  `zoom/participant-score` 503'd once (transient). Ready to build out.
+- ✅ **ADEM path enrichment** — shipped 2026-07-20 as `scm_adem_query`
+  (`tools/adem.py`): one consolidated tool over all 13 `access/adem` paths
+  (`extract_adem` in the extractor still covers `agent_score`/`application_score`
+  internally for AS-BUILT/MSR; this tool exposes those plus the 11 others for
+  ad-hoc use). Per-view parameter support (endpoint-type/response-type enums,
+  filter requirements) encoded per-endpoint against the live OpenAPI spec, not
+  guessed — invalid combinations fail with a helpful message instead of a raw
+  400. Live-validated on a lab tenant: 9 of 13 views return real `200`s
+  (`application_metric`, `internet_metric`, `rum_metric`, `rum_score`,
+  `zoom_participant_score`, `zoom_qos`, plus the two extractor-shared views);
+  `agent_properties`/`route_hops` need a real `agent_uuid`/`site_id`/`probe_uuid`
+  filter to return data (the tool correctly refuses without one);
+  `zoom_participant` 400s on an upstream backend quirk (`Unrecognized name:
+  office_location_tag`) unrelated to request params — a PAN-side issue, not
+  ours. 23 tests.
 
 ### Blocked
 

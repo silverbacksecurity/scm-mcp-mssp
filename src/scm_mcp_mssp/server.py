@@ -21,6 +21,7 @@ from .auth.oauth import get_scm_client, list_loaded_tenants
 from .config.settings import TenantConfig, get_settings
 from .dashboard import instrument_server, register_dashboard
 from .resources.tenant import register_tenant_resources
+from .tools.adem import register_adem_tools
 from .tools.adnsr import register_adnsr_tools
 from .tools.ai_advisor import register_ai_advisor_tools
 from .tools.aiops import register_aiops_tools
@@ -183,6 +184,7 @@ def register_all_tools(
     register_planner_tools(mcp, get_client)
     register_insights_tools(mcp, get_client)
     register_mt_monitor_tools(mcp, get_client)
+    register_adem_tools(mcp, get_client)
 
 
 def create_server() -> FastMCP:

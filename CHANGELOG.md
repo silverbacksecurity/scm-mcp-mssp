@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`scm_adem_query`** (`tools/adem.py`) — general-purpose query tool over all 13 `access/adem` telemetry paths (agent properties/metrics/scores, application metrics/scores, internet metrics, nav traffic, route hops, RUM metrics/scores, Zoom participant/QoS), consolidating the family the way `scm_insights_query` did for Insights. `extract_adem` in the AS-BUILT/MSR extractor still covers `agent_score`/`application_score` internally; this tool adds ad-hoc access to those plus the 11 other paths. Per-view parameter support (`endpoint-type`/`response-type` enums, `filter` requirements) is encoded per-endpoint against the live OpenAPI spec rather than guessed, so an invalid combination fails with a helpful message instead of a raw 400. Live-validated on a lab tenant: 9 of 13 views return real `200`s with tenant-scoped data; `agent_properties`/`route_hops` correctly refuse without a real `agent_uuid`/`site_id`/`probe_uuid` filter; `zoom_participant` 400s on an upstream backend quirk unrelated to request params. 23 tests
+
+### Fixed
+- **Stale Dependabot cryptography cap + resolved SOC2 risk entry** — `dependabot.yml` ignored cryptography `>=47.0.0` forever (a leftover from when `pan-scm-sdk==0.15.0` pinned `cryptography<47`), silently blocking every legitimate update since `pan-scm-sdk==0.15.1` now requires `cryptography>=49.0.0,<50.0.0` (already installed). Cap updated to `>=50.0.0`. `soc2-controls.yaml` still listed the cryptography/OpenSSL CVE (GHSA-537c-gmf6-5ccf) as an open accepted risk long after the fix — moved to a new `resolved_risks` record documenting the resolution instead of silently deleting the audit trail
+- **A lab tenant pair's `default_folder` mismatch** — two tenants were configured with `default_folder = "Shared"`, a folder that doesn't exist for either (`400 ObjectNotPresentError`), breaking every tool that defaults to the tenant's folder (`zone_list` and beyond). Live-verified the actual working folder is `ngfw-shared` for both — real zones, security rules, address objects, and NAT rules all live there. This is a `settings.toml` (git-ignored, live config) fix, not a code change
+
+## [0.11.0] - 2026-07-20
+
+### Added
 - **MSR round 2 — bandwidth vs allocation, mobile users, ADEM, security events** (`audit/msr_report.py`, `tools/msr.py`) — the pack grows from 8 to 11 sections. §7 now compares per-RN-location bandwidth over the review window against the region's allocated bandwidth (SCM bandwidth allocations joined by normalised location name) with utilisation % per row and a ≥90% executive-summary flag; the Insights v3 backend rejects a `between` month filter (500s until the retry adapter gives up), so the query falls back to an honest `last_n_days` window and the section discloses which window was actually used — unmatched allocations still render as allocation-only rows so idle regions show. §8 Mobile Users: unique users connected in the window plus a per-location breakdown (deduplicated by username per location). §9 Digital Experience: ADEM agent experience scores (mobile users + remote networks; 3-day telemetry window, disclosed); a 401 renders the actionable ADEM-scope hint. §10 Security Events: threats detected vs blocked (Critical/High/Medium) from the Monitor API threat summary, with a blocked-count executive bullet. Service stats gain a commit-job count and the unique-MU row. Live-validated on both lab tenants: allocation-only join (50 Mbps europe-northwest), 2 ADEM agent scopes on one tenant / clean RBAC degradation on the other, and real threat counts (481 blocked of 1005; 156 of 372). 22 new tests (647 → 669)
 
 ### Fixed
@@ -55,8 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **CI green-up + PYSEC-2026-3447 (setuptools) suppression** — cleared 7 mypy errors and 2 unformatted files left over from the MSR round 2 push (mostly reused loop-local variable names — `rows`, `vals` — picking up a fixed type from their first use in a shared function scope; renamed each independently). `pan-scm-sdk==0.15.1`'s wheel metadata hard-pins `setuptools>=78.1.1,<79.0.0` (PYSEC-2026-3447); a `[tool.uv] override-dependencies` bump to a patched version was tried first but breaks pip's real dependency resolution against the SDK's own metadata (`ResolutionImpossible`), so it was reverted in favour of suppressing the CVE in the `pip-audit` CI step with a SOC2 accepted-risk entry — the same pattern already used for the cryptography/pan-scm-sdk CVE (GHSA-537c-gmf6-5ccf)
-
-## [0.11.0] - 2026-07-20
 
 ## [0.10.0] - 2026-07-13
 
