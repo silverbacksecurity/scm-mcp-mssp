@@ -2167,10 +2167,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
         }
         if resource not in _VALID_IPFIX:
             return _fmt(
-                {
-                    "error": f"Unknown resource: {resource!r}. "
-                    f"Use one of: {', '.join(_VALID_IPFIX)}"
-                }
+                {"error": f"Unknown resource: {resource!r}. Use one of: {', '.join(_VALID_IPFIX)}"}
             )
 
         try:
@@ -2213,8 +2210,9 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                     }
                 )
 
-            # Collection resources
+            # Collection resources — element_ipfix (the only None value) returned above
             endpoint = _VALID_IPFIX[resource]
+            assert endpoint is not None
             sdk_method = getattr(sdk.get, endpoint, None)
             if sdk_method:
                 resp = sdk_method()
@@ -2456,10 +2454,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
         }
         if resource not in _PERF_PATHS:
             return _fmt(
-                {
-                    "error": f"Unknown resource: {resource!r}. "
-                    f"Use one of: {', '.join(_PERF_PATHS)}"
-                }
+                {"error": f"Unknown resource: {resource!r}. Use one of: {', '.join(_PERF_PATHS)}"}
             )
 
         try:

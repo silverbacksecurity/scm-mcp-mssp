@@ -407,7 +407,9 @@ def register_insights_tools(mcp: FastMCP, get_client: Any) -> None:
             # Extract download_id from response
             dl_id = ""
             if isinstance(data, dict):
-                dl_id = data.get("download_id", data.get("id", data.get("request_id", "")))
+                dl_id = str(
+                    data.get("download_id") or data.get("id") or data.get("request_id") or ""
+                )
 
             return _fmt(
                 {

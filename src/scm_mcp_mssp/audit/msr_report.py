@@ -695,8 +695,8 @@ def render_msr_report(data: MsrData) -> str:  # noqa: C901
             "|" + "---|" * (len(cols) + 1),
         ]
         for row in data.bandwidth_rows[:40]:
-            vals = " | ".join(str(row.get(c, "—")) for c in cols)
-            lines.append(f"| {_bw_name(row)} | {vals} |")
+            row_str = " | ".join(str(row.get(c, "—")) for c in cols)
+            lines.append(f"| {_bw_name(row)} | {row_str} |")
     elif "bandwidth" in data.errors:
         lines.append(f"> ⚠️ Bandwidth data unavailable: {data.errors['bandwidth']}")
     else:

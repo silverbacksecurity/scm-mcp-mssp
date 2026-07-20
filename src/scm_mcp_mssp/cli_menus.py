@@ -113,7 +113,7 @@ def _menu_config_inventory(
 
     def _draw_section_page(page: int) -> None:
         _print_banner(tenant)
-        console.rule(f"[cyan]Config & Inventory[/cyan]  [dim]page {page+1}/{len(_PAGES)}[/dim]")
+        console.rule(f"[cyan]Config & Inventory[/cyan]  [dim]page {page + 1}/{len(_PAGES)}[/dim]")
         section_name, items = _PAGES[page]
         _section(section_name)
         console.print(_menu_table(items))
@@ -338,7 +338,7 @@ def _menu_sdwan(
 
     def _draw_section_page(page: int) -> None:
         _print_banner(tenant)
-        console.rule(f"[cyan]Prisma SD-WAN[/cyan]  [dim]page {page+1}/{len(_PAGES)}[/dim]")
+        console.rule(f"[cyan]Prisma SD-WAN[/cyan]  [dim]page {page + 1}/{len(_PAGES)}[/dim]")
         section_name, items = _PAGES[page]
         _section(section_name)
         console.print(_menu_table(items))

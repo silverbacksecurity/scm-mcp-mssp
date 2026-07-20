@@ -226,8 +226,8 @@ def gather_msr_data(
                 window = f"last {days} days (month filter unsupported)"
             if status != 200:
                 raise RuntimeError(f"HTTP {status}: {str(resp)[:200]}")
-            rows = resp.get("data") if isinstance(resp, dict) else None
-            data.bw_month_rows = list(rows or [])
+            month_rows = resp.get("data") if isinstance(resp, dict) else None
+            data.bw_month_rows = list(month_rows or [])
             data.bw_month_window = window
 
             try:
@@ -277,8 +277,8 @@ def gather_msr_data(
                 window = f"last {days} days"
                 status, resp = _insights_try(session, cpath, tsg_id, win, mapped)
             if status == 200 and isinstance(resp, dict):
-                rows = resp.get("data") or []
-                first = rows[0] if rows else {}
+                mu_rows = resp.get("data") or []
+                first = mu_rows[0] if mu_rows else {}
                 count = next(
                     (
                         v
@@ -356,10 +356,10 @@ def gather_msr_data(
             )
             if resp.status_code != 200:
                 continue
-            rows = (resp.json() or {}).get("data") or []
-            if rows:
-                total = sum(r.get("total_threats") or 0 for r in rows)
-                blocked = sum(r.get("blocked_count") or 0 for r in rows)
+            threat_rows = (resp.json() or {}).get("data") or []
+            if threat_rows:
+                total = sum(r.get("total_threats") or 0 for r in threat_rows)
+                blocked = sum(r.get("blocked_count") or 0 for r in threat_rows)
                 data.threat_summary = {
                     "total_threats": total,
                     "blocked_count": blocked,
