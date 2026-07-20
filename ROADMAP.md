@@ -254,6 +254,12 @@ testing._
 - ✅ **MT Monitor round 3** — shipped 2026-07-17.  24 views covering 34/36 catalog paths.
 - ✅ **Insights export workflow** — shipped 2026-07-17.  `scm_insights_export` +
   v3 export path fix.
+- **`GET /mt/pab/tenant/auth_profile`** (`sase/pab-msp`) — the one path in the
+  already-tooled PAB-for-MSP family with no consumer. `region`/`licenses`/
+  `directories` are covered in the AS-BUILT extractor; `scm_pab_msp_summary`/
+  `_report` cover the summary and report paths; the two POST paths (tenant
+  creation, user-group creation) are deliberately excluded as writes.
+  `auth_profile` is read-only and was just missed — small addition, no blocker.
 
 ### Blocked
 
