@@ -260,6 +260,19 @@ testing._
   `_report` cover the summary and report paths; the two POST paths (tenant
   creation, user-group creation) are deliberately excluded as writes.
   `auth_profile` is read-only and was just missed — small addition, no blocker.
+- **ADEM path enrichment** (`access/adem`, 13 paths) — **unblocked 2026-07-20**.
+  A lab tenant is ADEM-licensed (`add_adem_aiops`, both MU and RN, via its
+  SCM Pro entitlement) and API-reachable: live-tested all 11 paths
+  `extract_adem` doesn't yet use (only `measure/application/score` and
+  `measure/agent/score` are wired up today) — zero 401/403 across the board.
+  `measure/application/metric`, `measure/internet/metric`, `measure/rum/metric`,
+  and `measure/rum/score` returned real `200`s with tenant-scoped data; the
+  rest 400'd only on missing/wrong params for a quick smoke test (`agent/properties`
+  needs a `filter`, `measure/route/hops` needs `agent_uuid`/`site_id`/`probe_uuid`,
+  `measure/agent/metric`/`nav/traffic`/`zoom/qos` need the exact `response-type`
+  enum per the spec, `zoom/participant` rejected an unrecognized param) —
+  normal integration work against the real schema, not a licensing gap.
+  `zoom/participant-score` 503'd once (transient). Ready to build out.
 
 ### Blocked
 
@@ -270,8 +283,6 @@ testing._
   confirmed live but current service accounts get 403.
 - **SPI in documents and dashboards** — AS-BUILT §3 + NOC dashboard SPI column.
   Blocked on SPI-enrolled MSP-mode service account (401 on `/mt/sp-interconnect/*`).
-- **ADEM path enrichment** — `access/adem`, 13 paths.  Needs ADEM-licensed tenant
-  with agents/tests enabled.
 - **5G Manage/Monitor** — 47 paths.  Needs 5G-enrolled tenant.
 - **cloudngfw/aws** — 135 paths.  Deferred until lab tenant with Cloud NGFW
   entitlement exists.
