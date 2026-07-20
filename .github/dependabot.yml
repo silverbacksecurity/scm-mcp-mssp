@@ -17,9 +17,10 @@ updates:
           - minor
           - patch
     ignore:
-      # cryptography pinned by pan-scm-sdk<47 — tracked in soc2-controls.yaml
+      # cryptography capped by pan-scm-sdk==0.15.1 at <50.0.0 — re-check this
+      # cap whenever pan-scm-sdk is upgraded; tracked in soc2-controls.yaml
       - dependency-name: cryptography
-        versions: [">=47.0.0"]
+        versions: [">=50.0.0"]
     labels:
       - dependencies
       - python

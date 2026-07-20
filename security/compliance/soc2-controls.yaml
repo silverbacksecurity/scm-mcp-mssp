@@ -5,7 +5,7 @@
 metadata:
   project: scm-mcp-mssp
   compliance_target: SOC2 Type II
-  last_reviewed: 2026-06-17
+  last_reviewed: 2026-07-20
   reviewer: silverbacksec
 
 controls:
@@ -106,18 +106,6 @@ controls:
     title: Vulnerability Management
     description: The entity responds to identified vulnerabilities to meet its objectives.
     accepted_risks:
-      - id: GHSA-537c-gmf6-5ccf
-        package: cryptography 46.0.7
-        severity: HIGH (CVSS 7.5)
-        summary: Vulnerable OpenSSL bundled in cryptography wheels
-        fix_version: ">=48.0.1"
-        blocker: pan-scm-sdk==0.15.0 pins cryptography<47
-        remediation: Upgrade pan-scm-sdk once it relaxes the cryptography constraint
-        accepted_date: 2026-06-17
-        residual_risk: >
-          pan-scm-sdk uses cryptography only for OAuth2 token signing/verification
-          over existing HTTPS connections; the TLS stack is provided by httpx/OS.
-          Attack surface is limited to token forgery, not network-level exploitation.
       - id: PYSEC-2026-3447
         package: setuptools 78.1.1
         severity: not yet rated
@@ -132,6 +120,22 @@ controls:
           tried and rejected by pip's own dependency resolver as conflicting with
           pan-scm-sdk's declared metadata, confirming the pin is load-bearing for
           pip-audit's install-time check even though runtime exposure is minimal.
+    resolved_risks:
+      - id: GHSA-537c-gmf6-5ccf
+        package: cryptography
+        severity: HIGH (CVSS 7.5)
+        summary: Vulnerable OpenSSL bundled in cryptography wheels
+        accepted_date: 2026-06-17
+        resolved_date: 2026-07-20
+        resolution: >
+          pan-scm-sdk relaxed its cryptography constraint (now
+          >=49.0.0,<50.0.0 as of 0.15.1); cryptography 49.0.0 is installed,
+          past the >=48.0.1 fix version. The corresponding --ignore-vuln
+          entry in .github/workflows/security-scan.yml was already removed
+          (no longer present as of this review); the Dependabot ignore rule
+          in .github/dependabot.yml has been updated from the stale
+          `>=47.0.0` cap to the current `>=50.0.0` cap matching pan-scm-sdk's
+          real constraint.
     implementation:
       - control: Automated dependency audit (pip-audit)
         location: .github/workflows/security-scan.yml (dependency-audit job)
