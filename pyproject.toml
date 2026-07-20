@@ -46,11 +46,6 @@ dev = [
     "types-pyyaml>=6.0",
 ]
 
-# pan-scm-sdk 0.15.1 pins setuptools>=78.1.1,<79.0.0, which is PYSEC-2026-3447.
-# No upstream release fixes this yet; override to a patched version.
-[tool.uv]
-override-dependencies = ["setuptools>=83.0.0"]
-
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"

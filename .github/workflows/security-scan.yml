@@ -35,7 +35,12 @@ jobs:
         run: |
           # Filter out the editable project install (-e .) which pip-audit can't hash
           uv export --no-dev --format requirements-txt | grep -v "^-e " > /tmp/requirements.txt
+          # PYSEC-2026-3447 (setuptools 78.1.1) suppressed: pan-scm-sdk==0.15.1 pins
+          # setuptools>=78.1.1,<79.0.0; forcing a newer setuptools breaks pip's real
+          # dependency resolution against pan-scm-sdk's own wheel metadata (verified —
+          # not just a version-string mismatch). Upgrade tracked pending upstream SDK update.
           uvx pip-audit --require-hashes --strict \
+            --ignore-vuln PYSEC-2026-3447 \
             --requirement /tmp/requirements.txt
 
   sast:

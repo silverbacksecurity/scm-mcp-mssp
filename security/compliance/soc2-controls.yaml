@@ -57,7 +57,7 @@ controls:
         evidence: SDK enforces HTTPS for all Strata Cloud Manager API endpoints.
       - control: SSE transport binds to 127.0.0.1 by default
         location: src/scm_mcp_mssp/server.py:148
-        evidence: "--host default: 127.0.0.1" prevents unintended external exposure.
+        evidence: "--host default of 127.0.0.1 prevents unintended external exposure."
       - control: Nginx TLS proxy for external SSE
         location: security/config/tls/nginx-mcp-proxy.conf
         evidence: TLS 1.3 termination if SSE transport is exposed beyond localhost.
@@ -118,6 +118,20 @@ controls:
           pan-scm-sdk uses cryptography only for OAuth2 token signing/verification
           over existing HTTPS connections; the TLS stack is provided by httpx/OS.
           Attack surface is limited to token forgery, not network-level exploitation.
+      - id: PYSEC-2026-3447
+        package: setuptools 78.1.1
+        severity: not yet rated
+        summary: Known vulnerability in setuptools 78.1.1
+        fix_version: ">=83.0.0"
+        blocker: pan-scm-sdk==0.15.1 pins setuptools>=78.1.1,<79.0.0
+        remediation: Upgrade pan-scm-sdk once it relaxes the setuptools constraint
+        accepted_date: 2026-07-20
+        residual_risk: >
+          setuptools is a build-time/packaging dependency, not exercised by
+          scm-mcp-mssp or pan-scm-sdk at runtime; a forced upgrade to 83.0.0 was
+          tried and rejected by pip's own dependency resolver as conflicting with
+          pan-scm-sdk's declared metadata, confirming the pin is load-bearing for
+          pip-audit's install-time check even though runtime exposure is minimal.
     implementation:
       - control: Automated dependency audit (pip-audit)
         location: .github/workflows/security-scan.yml (dependency-audit job)
