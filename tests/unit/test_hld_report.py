@@ -594,6 +594,20 @@ class TestObservability:
         assert "ADEM" in md
         assert "Manual input required" in md
 
+    def test_adem_3day_window_labeled_when_used(self, empty_snap: AuditSnapshot) -> None:
+        empty_snap.adem_agent_summary = {"muAgent": {"clients": 5, "score": 90}}
+        empty_snap.adem_timerange_used = "last_3_day"
+        md = _build(empty_snap)
+        assert "last 3 days" in md
+        assert "Fell back" not in md
+
+    def test_adem_30day_fallback_noted_when_used(self, empty_snap: AuditSnapshot) -> None:
+        empty_snap.adem_agent_summary = {"muAgent": {"clients": 5, "score": 90}}
+        empty_snap.adem_timerange_used = "last_30_day"
+        md = _build(empty_snap)
+        assert "last 30 days" in md
+        assert "hasn't logged in recently" in md
+
     def test_cdl_placeholder_present(self, empty_snap: AuditSnapshot) -> None:
         md = _build(empty_snap)
         assert "Cortex Data Lake" in md

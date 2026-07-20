@@ -272,10 +272,14 @@ class AuditSnapshot:
     # Each entry: {zone, node_name, address_type, node_type, ip_address_list: [...]}
     prisma_egress_ips: list[dict[str, Any]] = field(default_factory=list)
 
-    # Autonomous DEM — live experience telemetry (last 3 days, muAgent + rnAgent)
+    # Autonomous DEM — live experience telemetry (muAgent + rnAgent). Default
+    # window is last 3 days; extract_adem retries at last_30_day if that
+    # comes back empty (e.g. low-activity lab tenants) — see
+    # adem_timerange_used for which window actually produced the data below.
     adem_app_scores: list[dict[str, Any]] = field(default_factory=list)
     adem_agent_summary: dict[str, Any] = field(default_factory=dict)
     adem_errors: list[str] = field(default_factory=list)
+    adem_timerange_used: str = "last_3_day"
 
     # Prisma Access Insights — live operational data (populated via Insights v3.0 API)
     # connected_mu_count: -1 = not retrieved, 0+ = live count from Insights API

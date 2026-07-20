@@ -312,14 +312,19 @@ def gather_msr_data(
         data.errors["bandwidth_month"] = "skipped (include_insights=False)"
         data.errors["mobile_users"] = "skipped (include_insights=False)"
 
-    # ── ADEM experience snapshot (3-day telemetry window) ───────────────
+    # ── ADEM experience snapshot (3-day window, falls back to 30-day) ───
     try:
         snap = AuditSnapshot(folder="", tenant_id=tsg_id)
         extract_adem(client, snap)
         if snap.adem_agent_summary:
-            data.adem_summary = {"agents": snap.adem_agent_summary, "errors": snap.adem_errors}
+            data.adem_summary = {
+                "agents": snap.adem_agent_summary,
+                "errors": snap.adem_errors,
+                "timerange_used": snap.adem_timerange_used,
+            }
+            _window = "3-day" if snap.adem_timerange_used == "last_3_day" else "30-day"
             data.gathered.append(
-                f"ADEM — {len(snap.adem_agent_summary)} agent scope(s) (3-day window)"
+                f"ADEM — {len(snap.adem_agent_summary)} agent scope(s) ({_window} window)"
             )
         elif snap.adem_errors:
             data.errors["adem"] = "; ".join(snap.adem_errors[:2])

@@ -4518,11 +4518,20 @@ class AsBuiltReportBuilder:
 
         _adem_tried = snap.adem_app_scores or snap.adem_agent_summary or snap.adem_errors
         if _adem_tried:
+            _window_label = (
+                "last 3 days" if snap.adem_timerange_used == "last_3_day" else "last 30 days"
+            )
             self._p(
-                "Live experience telemetry from the ADEM API "
-                "(`/adem/telemetry/v2`, last 3 days). "
+                f"Live experience telemetry from the ADEM API "
+                f"(`/adem/telemetry/v2`, {_window_label}). "
                 "Scores 0–100; ✓ Good ≥80 · ⚠ Fair 60–79 · ✗ Poor <60."
             )
+            if snap.adem_timerange_used != "last_3_day":
+                self._note(
+                    "No ADEM activity in the last 3 days, so this section falls back to "
+                    "a 30-day window — typical for lab/low-activity tenants where the "
+                    "test user hasn't logged in recently."
+                )
             self._p()
 
             # Agent health summary per endpoint type
@@ -4592,7 +4601,8 @@ class AsBuiltReportBuilder:
 
             if not dist_entries and not user_entries:
                 self._p(
-                    "_No ADEM telemetry data for the last 3 days — "
+                    f"_No ADEM telemetry data for the {_window_label} "
+                    "(checked both the 3-day and 30-day windows) — "
                     "no agents were connected or reporting during this period._"
                 )
 

@@ -729,9 +729,16 @@ def render_msr_report(data: MsrData) -> str:  # noqa: C901
     lines += ["", "## 9. Digital Experience (ADEM)", ""]
     agents = data.adem_summary.get("agents") or {}
     if agents:
+        _fell_back = data.adem_summary.get("timerange_used") == "last_30_day"
+        _window = "30-day" if _fell_back else "3-day"
+        _note = (
+            " Fell back to a 30-day window because no activity was found in the last 3 days."
+            if _fell_back
+            else ""
+        )
         lines += [
-            "_Experience scores from Autonomous DEM (3-day window at generation"
-            " time — ADEM telemetry does not retain a month of history)._",
+            f"_Experience scores from Autonomous DEM ({_window} window at generation"
+            f" time — ADEM telemetry does not retain a month of history.{_note}_",
             "",
             "| Scope | Score | Clients | Good | Fair | Poor |",
             "|---|---|---|---|---|---|",

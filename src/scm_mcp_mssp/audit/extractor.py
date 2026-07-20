@@ -1071,8 +1071,16 @@ def extract_adem(client: Any, snap: AuditSnapshot) -> AuditSnapshot:
     Valid group values: Entity.user, Entity.endpoint (used with grouped-* types).
 
     Results are stored in snap.adem_app_scores and snap.adem_agent_summary.
-    These are operational telemetry (last 3 days), not configuration — the
-    ADEM monitoring config (tested apps, thresholds) has no public read API.
+    These are operational telemetry, not configuration — the ADEM monitoring
+    config (tested apps, thresholds) has no public read API.
+
+    The default window is last_3_day. Low-activity tenants (e.g. a lab
+    tenant whose test user hasn't logged in for a few days) come back
+    completely empty at that window even though the ADEM API has data —
+    it's just outside the last 3 days. When the 3-day pass finds nothing,
+    we retry once at last_30_day and record which window actually produced
+    data in snap.adem_timerange_used so the report can say so accurately
+    instead of claiming "last 3 days" over an empty section.
 
     Ref: https://pan.dev/access/docs/adem/
     """
@@ -1083,7 +1091,6 @@ def extract_adem(client: Any, snap: AuditSnapshot) -> AuditSnapshot:
 
     tsg_id = snap.tenant_id
     headers = {"prisma-tenant": tsg_id}
-    timerange = "last_3_day"
 
     def _adem_get(path: str, params: dict[str, str]) -> dict[str, Any] | None:
         try:
@@ -1108,91 +1115,126 @@ def extract_adem(client: Any, snap: AuditSnapshot) -> AuditSnapshot:
             logger.warning("adem_request_error", path=path, error=str(exc))
             return None
 
-    # ── Application score distribution + per-user grouped summary ──────────
-    app_scores: list[dict[str, Any]] = []
-    for ep_type in ("muAgent", "rnAgent"):
-        ep_label = "Mobile Users" if ep_type == "muAgent" else "Remote Networks"
+    def _run(timerange: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        # ── Application score distribution + per-user grouped summary ──────
+        app_scores: list[dict[str, Any]] = []
+        for ep_type in ("muAgent", "rnAgent"):
+            ep_label = "Mobile Users" if ep_type == "muAgent" else "Remote Networks"
 
-        # Distribution: good/fair/poor client counts
-        dist = _adem_get(
-            "/measure/application/score",
-            {"timerange": timerange, "endpoint-type": ep_type, "response-type": "distribution"},
-        )
-        if dist and dist.get("distribution"):
-            d = dist["distribution"]
-            clients = d.get("clients") or 0
-            if clients and clients > 0:
-                app_scores.append(
-                    {
-                        "app_name": f"All Applications ({ep_label})",
-                        "endpoint_type": ep_type,
-                        "score": d.get("score"),
-                        "clients_good": d.get("good") or 0,
-                        "clients_fair": d.get("fair") or 0,
-                        "clients_poor": d.get("poor") or 0,
-                        "total_clients": clients,
-                        "_type": "distribution",
-                    }
-                )
+            # Distribution: good/fair/poor client counts
+            dist = _adem_get(
+                "/measure/application/score",
+                {
+                    "timerange": timerange,
+                    "endpoint-type": ep_type,
+                    "response-type": "distribution",
+                },
+            )
+            if dist and dist.get("distribution"):
+                d = dist["distribution"]
+                clients = d.get("clients") or 0
+                if clients and clients > 0:
+                    app_scores.append(
+                        {
+                            "app_name": f"All Applications ({ep_label})",
+                            "endpoint_type": ep_type,
+                            "score": d.get("score"),
+                            "clients_good": d.get("good") or 0,
+                            "clients_fair": d.get("fair") or 0,
+                            "clients_poor": d.get("poor") or 0,
+                            "total_clients": clients,
+                            "_type": "distribution",
+                        }
+                    )
 
-        # Per-user grouped summary — collection[] contains one entry per user
-        grouped = _adem_get(
-            "/measure/application/score",
-            {
-                "timerange": timerange,
-                "endpoint-type": ep_type,
-                "response-type": "grouped-summary",
-                "group": "Entity.user",
-            },
-        )
-        if grouped:
-            collection = grouped.get("collection") or []
-            for item in collection[:50]:  # cap at 50 users
-                user = item.get("entityValue") or item.get("user") or item.get("name") or "Unknown"
-                score_data = item.get("score") or item.get("average") or item.get("data") or {}
-                score_val = score_data.get("score") if isinstance(score_data, dict) else score_data
-                app_scores.append(
-                    {
-                        "app_name": user,
-                        "endpoint_type": ep_type,
-                        "score": score_val,
-                        "_type": "user",
-                        "ep_label": ep_label,
-                    }
-                )
+            # Per-user grouped summary — collection[] has one entry per user
+            grouped = _adem_get(
+                "/measure/application/score",
+                {
+                    "timerange": timerange,
+                    "endpoint-type": ep_type,
+                    "response-type": "grouped-summary",
+                    "group": "Entity.user",
+                },
+            )
+            if grouped:
+                collection = grouped.get("collection") or []
+                for item in collection[:50]:  # cap at 50 users
+                    user = (
+                        item.get("entityValue") or item.get("user") or item.get("name") or "Unknown"
+                    )
+                    score_data = item.get("score") or item.get("average") or item.get("data") or {}
+                    score_val = (
+                        score_data.get("score") if isinstance(score_data, dict) else score_data
+                    )
+                    app_scores.append(
+                        {
+                            "app_name": user,
+                            "endpoint_type": ep_type,
+                            "score": score_val,
+                            "_type": "user",
+                            "ep_label": ep_label,
+                        }
+                    )
+
+        # ── Agent score summary + distribution ──────────────────────────────
+        agent_summary: dict[str, Any] = {}
+        for ep_type in ("muAgent", "rnAgent"):
+            summary = _adem_get(
+                "/measure/agent/score",
+                {"timerange": timerange, "endpoint-type": ep_type, "response-type": "summary"},
+            )
+            if summary is None:
+                continue
+            dist = _adem_get(
+                "/measure/agent/score",
+                {"timerange": timerange, "endpoint-type": ep_type, "response-type": "distribution"},
+            )
+            dist_data = (dist or {}).get("distribution") or {}
+            agent_summary[ep_type] = {
+                "row_count": summary.get("rowCount", 0),
+                "start_time": summary.get("startTime"),
+                "end_time": summary.get("endTime"),
+                "classifier": (dist or {}).get("classifier", ""),
+                "clients": dist_data.get("clients", 0),
+                "clients_good": dist_data.get("good"),
+                "clients_fair": dist_data.get("fair"),
+                "clients_poor": dist_data.get("poor"),
+                "score": dist_data.get("score"),
+            }
+
+        return app_scores, agent_summary
+
+    def _has_data(app_scores: list[dict[str, Any]], agent_summary: dict[str, Any]) -> bool:
+        if app_scores:
+            return True
+        return any((d.get("clients") or 0) > 0 for d in agent_summary.values())
+
+    errors_before = len(snap.adem_errors)
+    app_scores, agent_summary = _run("last_3_day")
+    timerange_used = "last_3_day"
+
+    # Low-activity tenants (e.g. a lab tenant whose test user hasn't logged
+    # in for a few days) come back empty at the 3-day window even though
+    # ADEM has data further back. Retry once at 30 days before giving up —
+    # but only if the empty result wasn't itself caused by a real API error
+    # (401/etc), which retrying at a wider window won't fix.
+    if not _has_data(app_scores, agent_summary) and len(snap.adem_errors) == errors_before:
+        wider_app_scores, wider_agent_summary = _run("last_30_day")
+        if _has_data(wider_app_scores, wider_agent_summary):
+            app_scores, agent_summary = wider_app_scores, wider_agent_summary
+            timerange_used = "last_30_day"
 
     snap.adem_app_scores = app_scores
-
-    # ── Agent score summary + distribution ─────────────────────────────────
-    for ep_type in ("muAgent", "rnAgent"):
-        summary = _adem_get(
-            "/measure/agent/score",
-            {"timerange": timerange, "endpoint-type": ep_type, "response-type": "summary"},
-        )
-        if summary is None:
-            continue
-        dist = _adem_get(
-            "/measure/agent/score",
-            {"timerange": timerange, "endpoint-type": ep_type, "response-type": "distribution"},
-        )
-        dist_data = (dist or {}).get("distribution") or {}
-        snap.adem_agent_summary[ep_type] = {
-            "row_count": summary.get("rowCount", 0),
-            "start_time": summary.get("startTime"),
-            "end_time": summary.get("endTime"),
-            "classifier": (dist or {}).get("classifier", ""),
-            "clients": dist_data.get("clients", 0),
-            "clients_good": dist_data.get("good"),
-            "clients_fair": dist_data.get("fair"),
-            "clients_poor": dist_data.get("poor"),
-            "score": dist_data.get("score"),
-        }
+    snap.adem_agent_summary = agent_summary
+    snap.adem_timerange_used = timerange_used
 
     logger.info(
         "adem_extracted",
         app_entries=len(snap.adem_app_scores),
         agent_types=list(snap.adem_agent_summary),
         errors=len(snap.adem_errors),
+        timerange_used=timerange_used,
     )
     return snap
 
