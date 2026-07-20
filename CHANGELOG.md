@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`scm_renewal_brief`** (`tools/ops.py`) — renewal-conversation brief combining subscription licences (contracted vs consumed seats, expiry), bandwidth allocations per compute location, and the live Insights v3.0 connected mobile-user count: renewal-window table for the chosen horizon (default 180 days), consumption-vs-contract signals (OVERSUBSCRIBED → true-up conversation, UNDERUSED → downsize risk), capacity snapshot, and generated talking points. `all_tenants=true` sweeps under the shared parallel poll budget. Live data drove two fixes: same-SKU bundles whose expirations differ only by seconds now group by expiry date (no duplicate rows/talking points), and pooled parent SKUs with `remaining > purchased` (negative consumption) read N/A instead of UNDERUSED
 - **Planner Agent epic (roadmap + design stubs)** — new "Planner Agent — Agentic Orchestration Layer" epic in ROADMAP.md (PANW "NetSec Agents on SCM" taxonomy extended with an MSSP cross-tenant layer; four phases from tool manifest/safety rails through scheduled-ops MVP to estate fan-out), plus design stubs under `docs/planner-agent/`: ARCHITECTURE.md (taxonomy mapping table + persisted Plan JSON schema) and TOOL_MANIFEST.md (manifest spec with the write-tool and known-failure-mode entries populated; full 125-tool population TODO). Docs only — no implementation yet
 
+### Fixed
+- **CI green-up + PYSEC-2026-3447 (setuptools) suppression** — cleared 7 mypy errors and 2 unformatted files left over from the MSR round 2 push (mostly reused loop-local variable names — `rows`, `vals` — picking up a fixed type from their first use in a shared function scope; renamed each independently). `pan-scm-sdk==0.15.1`'s wheel metadata hard-pins `setuptools>=78.1.1,<79.0.0` (PYSEC-2026-3447); a `[tool.uv] override-dependencies` bump to a patched version was tried first but breaks pip's real dependency resolution against the SDK's own metadata (`ResolutionImpossible`), so it was reverted in favour of suppressing the CVE in the `pip-audit` CI step with a SOC2 accepted-risk entry — the same pattern already used for the cryptography/pan-scm-sdk CVE (GHSA-537c-gmf6-5ccf)
+
+## [0.11.0] - 2026-07-20
+
 ## [0.10.0] - 2026-07-13
 
 ### Added
