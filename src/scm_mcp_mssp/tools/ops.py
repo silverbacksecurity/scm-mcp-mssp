@@ -2279,7 +2279,7 @@ def register_ops_tools(mcp: FastMCP, get_client: Any) -> None:
 
         # ── 2. pan-scm-sdk GitHub release notes ──────────────────────────────
         lines += ["## pan-scm-sdk Latest Release", ""]
-        release = _gh_latest_release("PaloAltoNetworks", "pan-scm-sdk")
+        release = _gh_latest_release("cdot65", "pan-scm-sdk")
         if release:
             tag = release.get("tag_name", "?")
             pub = (release.get("published_at") or "")[:10]
