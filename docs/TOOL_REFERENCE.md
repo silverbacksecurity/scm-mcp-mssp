@@ -4,7 +4,7 @@
 
 All tools authenticate via Bearer-token OAuth (SASE client credentials) configured in `settings.toml` / `.secrets.toml`.
 
-**125 tools** across 21 modules.
+**161 tools** across 32 modules.
 
 ## Table of Contents
 
@@ -26,9 +26,20 @@ All tools authenticate via Bearer-token OAuth (SASE client credentials) configur
 - [Service Provider Interconnect](#service-provider-interconnect)
 - [Prisma Access Browser for MSP](#prisma-access-browser-for-msp)
 - [Utility](#utility)
+- [Adem](#adem)
+- [Cdl Logforwarding](#cdl-logforwarding)
+- [Compliance](#compliance)
+- [Config Orch](#config-orch)
+- [Csp Licensing](#csp-licensing)
+- [Dns Security](#dns-security)
+- [Email Dlp](#email-dlp)
+- [Insights](#insights)
+- [Msr](#msr)
 - [Mt Monitor](#mt-monitor)
 - [Pab](#pab)
+- [Planner Tools](#planner-tools)
 - [Service Status](#service-status)
+- [Ssr](#ssr)
 
 ---
 
@@ -1086,6 +1097,207 @@ Returns:
 | `save_to` | `str` | `''` |
 | `output_format` | `str` | `'markdown'` |
 
+### `scm_asbuilt_verify`
+
+Verify a completed AS-BUILT document against live tenant state.
+
+```
+Re-extracts a fresh core config snapshot (bypassing the snapshot
+cache) for the same tenant and folder the document was built from,
+then diffs it section by section against the snapshot behind the
+document. Flags every section where the document and the API now
+disagree — objects added, removed, or modified since generation —
+plus any extraction gaps that made the document incomplete at
+generation time.
+
+Run this after scm_asbuilt_result before handing the document to a
+customer: a clean verdict means the document still reflects the
+tenant; a drift verdict lists exactly which sections are stale.
+
+Only sections fed by the core config extraction are verified.
+Optional live-data sections (Insights, ADEM, SD-WAN) are not
+re-checked — they are operational metrics expected to change.
+
+Args:
+    job_id: Job ID of a completed scm_asbuilt_report job (jobs are
+            kept for 1 hour after completion).
+
+Returns:
+    Markdown verification report with a per-section match/drift
+    table, drift detail, and a refresh recommendation if needed.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `job_id` | `str` | `—` |
+
+### `scm_drift_baseline`
+
+Capture the known-good config baseline(s) for drift monitoring.
+
+```
+Extracts a fresh core config snapshot per tenant and stores it on disk
+(SCM_MCP_BASELINE_DIR, default ./baselines). scm_drift_check later
+compares live config against these baselines and reports what changed.
+
+Capture a baseline after a change window closes, when config is in a
+reviewed, known-good state.
+
+Args:
+    folder: SCM folder to baseline (default "Prisma Access").
+    tenant_id: SCM tenant ID (MSSP mode) for a single tenant.
+    all_tenants: If True, baseline every configured tenant in a
+                 background job — returns a job ID for scm_drift_result.
+
+Returns:
+    Capture summary (single tenant, ~2 min) or a job ID (all tenants).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'Prisma Access'` |
+| `tenant_id` | `str` | `''` |
+| `all_tenants` | `bool` | `False` |
+
+### `scm_drift_check`
+
+Check live config against the stored baseline and report drift.
+
+```
+Re-extracts a fresh core snapshot per tenant and diffs it section by
+section against the baseline captured by scm_drift_baseline. Drifted
+sections are triaged by severity — HIGH (security/NAT/decryption/auth
+rules, zones, VPN, identity, log forwarding), MEDIUM (protection
+profiles, posture, EDLs), LOW (address/service/tag plumbing) — and the
+digest lists exactly which objects were added, removed, or modified.
+
+This is the overnight sentinel: run it on a schedule with
+all_tenants=True and review the digest each morning. Unexplained HIGH
+drift means an unauthorised or unticketed change.
+
+Args:
+    folder: SCM folder to check (must match the baseline's folder).
+    tenant_id: SCM tenant ID (MSSP mode) for a single tenant.
+    all_tenants: If True, sweep every configured tenant in a
+                 background job — returns a job ID for scm_drift_result.
+    update_baseline: If True, roll the baseline forward to the current
+                     live state after checking — accept the changes as
+                     the new known-good once they are explained.
+
+Returns:
+    Drift digest (single tenant, ~2 min) or a job ID (all tenants).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'Prisma Access'` |
+| `tenant_id` | `str` | `''` |
+| `all_tenants` | `bool` | `False` |
+| `update_baseline` | `bool` | `False` |
+
+### `scm_drift_result`
+
+Retrieve the digest of an all-tenants drift sweep.
+
+```
+Args:
+    job_id: Job ID returned by scm_drift_baseline / scm_drift_check
+            with all_tenants=True (jobs are kept for 1 hour).
+
+Returns:
+    The capture summary or drift digest, or a status message if the
+    sweep is still running.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `job_id` | `str` | `—` |
+
+### `scm_commit_preview`
+
+Analyse the blast radius of pending changes BEFORE committing.
+
+```
+Run this instead of going straight to scm_commit. It extracts the
+current candidate config and compares it against the drift baseline
+(last known-good, captured by scm_drift_baseline), then reports:
+
+  1. Pending changes — every object the commit would add, remove, or
+     modify, triaged HIGH/MEDIUM/LOW by enforcement impact.
+  2. Rule shadowing — new or changed security rules that an earlier
+     rule fully covers (they can never match), or that themselves
+     shadow existing rules. Conservative literal-value check: group/
+     EDL membership is not resolved, so flagged shadows are real.
+  3. Best-practice delta — BPA findings this change introduces or
+     resolves, by running the check engine against both states.
+
+Verdict: 🔴 HIGH RISK (shadowing, new critical/high BPA findings, or
+removals/modifications in enforcement sections) / 🟡 REVIEW / 🟢 LOW
+RISK / no-op. After an approved commit, run
+scm_drift_check(update_baseline=True) so the next preview diffs
+against the newly approved state.
+
+Requires a drift baseline for the tenant+folder — capture one with
+scm_drift_baseline after each approved change window.
+
+Args:
+    folder: SCM folder the pending commit targets.
+    tenant_id: SCM tenant ID (MSSP mode).
+
+Returns:
+    Markdown blast-radius report with verdict and next steps
+    (~2 min: one fresh candidate extraction).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `folder` | `str` | `'Prisma Access'` |
+| `tenant_id` | `str` | `''` |
+
+### `scm_incident_rca`
+
+Correlate an incident with config pushes, expiries, and drift.
+
+```
+Given an incident time (default: now), walks the evidence this server
+can reach and ranks candidate causes by temporal proximity:
+
+  - Config pushes/commits (job history: who, what, result — failed
+    jobs rank ahead of successful ones at equal distance)
+  - Certificate expiries falling inside the window
+  - Licence expiries falling inside the window
+  - Config drift vs the drift baseline — presented separately as
+    state evidence, since extraction shows *what* differs, not *when*
+
+Output ends with a customer-facing RFO draft citing the top candidate
+and an explicit correlation-not-causation caveat, plus a list of
+evidence sources this run could not check.
+
+Args:
+    incident_time: Incident timestamp, UTC — "YYYY-MM-DD HH:MM" or
+                   epoch seconds. Empty = now (investigating live).
+    symptom: Short symptom description for the report and RFO draft
+             (e.g. "branch VPN tunnels down in region X").
+    lookback_hours: Evidence window before the incident (default 24).
+    folder: SCM folder for the drift comparison.
+    tenant_id: SCM tenant ID (MSSP mode).
+    include_drift: If False, skip the ~2-minute drift extraction and
+                   correlate timestamped evidence only.
+
+Returns:
+    Markdown RCA report: ranked candidate table, drift state
+    evidence, RFO draft, and caveats.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `incident_time` | `str` | `''` |
+| `symptom` | `str` | `''` |
+| `lookback_hours` | `int` | `24` |
+| `folder` | `str` | `'Prisma Access'` |
+| `tenant_id` | `str` | `''` |
+| `include_drift` | `bool` | `True` |
+
 ### `scm_config_diff`
 
 Compare two SCM config backup files and report differences.
@@ -1483,6 +1695,71 @@ Ref: https://pan.dev/dlp/api/
 | `tenant_id` | `str` | `''` |
 | `company_id` | `str` | `''` |
 | `dry_run` | `bool` | `True` |
+
+### `dlp_incidents_list`
+
+List Enterprise DLP incidents from the v4 Beta Incidents API.
+
+```
+Queries GET /v4/api/incidents on api.dlp.paloaltonetworks.com.
+The DLP Incidents API surfaces policy violations detected by
+Enterprise DLP — distinct from the Email DLP incidents API.
+
+Args:
+    tenant_id:  SCM tenant ID (MSSP mode). Omit for default tenant.
+    status:     Filter by incident status (e.g. "open", "resolved").
+    severity:   Filter by severity (e.g. "critical", "high", "medium", "low").
+    limit:      Max incidents to return (default 50, max 200).
+
+Returns:
+    JSON: list of DLP incidents with total count.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `status` | `str` | `''` |
+| `severity` | `str` | `''` |
+| `limit` | `int` | `50` |
+
+### `dlp_incidents_get`
+
+Get a single Enterprise DLP incident by ID.
+
+```
+Queries GET /v4/api/incidents/{id} on api.dlp.paloaltonetworks.com.
+
+Args:
+    tenant_id:   SCM tenant ID (MSSP mode). Omit for default tenant.
+    incident_id: DLP incident ID (required).
+
+Returns:
+    JSON: incident detail.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `incident_id` | `str` | `''` |
+
+### `dlp_incidents_assignees`
+
+List DLP incident assignees from the v1 GA Incidents API.
+
+```
+Queries GET /v1/api/incidents/assignee on api.dlp.paloaltonetworks.com.
+Returns the list of users/groups that can be assigned to DLP incidents.
+
+Args:
+    tenant_id:  SCM tenant ID (MSSP mode). Omit for default tenant.
+
+Returns:
+    JSON: list of assignees.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
 
 ---
 
@@ -2421,6 +2698,198 @@ Returns:
 | `tenant_id` | `str` | `''` |
 | `element_id` | `str` | `''` |
 
+### `sdwan_app_qos`
+
+Application QoS aggregates — per-app latency, jitter, loss, MOS.
+
+```
+Queries the SD-WAN monitor API for application-level QoS metrics.
+When ``application_name`` is set, scopes to one application; otherwise
+returns aggregate data across all applications.
+
+Uses the monitor/v2.0 application/qos aggregate endpoint.  Metric names
+are API-defined (e.g. ``LatencyMs``, ``JitterMs``, ``PacketLossPct``,
+``MOS``) — pass ``metric`` to scope to one, or omit for all.
+
+Args:
+    tenant_id:        TSG ID or settings key. Omit for default tenant.
+    application_name: Scope to one application (optional).
+    metric:           Scope to one metric name (optional).
+    hours:            Time window in hours (default 24).
+
+Returns:
+    JSON: per-application QoS aggregates with site/element context.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `application_name` | `str` | `''` |
+| `metric` | `str` | `''` |
+| `hours` | `int` | `24` |
+
+### `sdwan_interface_status`
+
+Interface operational status sweep for SD-WAN elements.
+
+```
+Queries interface status across all elements (or scoped by site/element).
+Returns port state, speed, duplex, and authentication status for each
+interface.  Uses the ``interfaces/status/query`` and ``interfaces/query``
+endpoints (v2.0/v4.20).
+
+Args:
+    tenant_id:    TSG ID or settings key. Omit for default tenant.
+    site_id:      Scope to one site (optional).
+    element_id:   Scope to one element (optional).
+    interface_id: Fetch a single interface's detailed status (optional).
+
+Returns:
+    JSON: interface status list with port operational state.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+| `interface_id` | `str` | `''` |
+
+### `sdwan_ipfix_config`
+
+Read IPFIX configuration (profiles, collector/filter contexts, templates, prefixes).
+
+```
+Lists IPFIX configuration resources for a tenant.  Read-only by default.
+Create/update/delete operations are gated behind the Planner write-approval
+check and require ``action`` to be explicitly set.
+
+Resource types: ``profiles``, ``collector_contexts``, ``filter_contexts``,
+``templates``, ``global_prefixes``, ``local_prefixes``, ``element_ipfix``.
+
+Args:
+    tenant_id:   TSG ID or settings key. Omit for default tenant.
+    resource:    IPFIX resource type (default: profiles).
+    action:      ``list`` (default) or ``get`` with resource_id.
+    resource_id: Fetch a single resource by ID (optional).
+    site_id:     Required when resource is element_ipfix.
+    element_id:  Required when resource is element_ipfix.
+
+Returns:
+    JSON: IPFIX configuration summary.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `resource` | `str` | `'profiles'` |
+| `action` | `str` | `'list'` |
+| `resource_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+
+### `sdwan_snmp_config`
+
+Read SNMP configuration (agents and trap destinations) per element.
+
+```
+Lists SNMP agent config (community strings, listeners) and trap
+destinations for SD-WAN elements.  Write operations are deferred
+behind the Planner write-approval gate.
+
+Args:
+    tenant_id:  TSG ID or settings key. Omit for default tenant.
+    element_id: Element ID (optional — lists all if omitted).
+    site_id:    Site ID (optional — scopes element lookup).
+    resource:   ``agents`` (default) or ``traps``.
+
+Returns:
+    JSON: SNMP configuration summary.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `resource` | `str` | `'agents'` |
+
+### `sdwan_event_correlation`
+
+Read event correlation policy sets, rules, and triggered correlation events.
+
+```
+Lists event correlation policy sets and their rules.  When ``site_id`` or
+``element_id`` is set, queries correlation events triggered for that scope.
+
+Write operations (create/update/delete policy sets and rules) are gated
+behind the Planner write-approval check.
+
+Args:
+    tenant_id:     TSG ID or settings key. Omit for default tenant.
+    policy_set_id: Fetch a single policy set's rules (optional).
+    site_id:       Query correlation events for a site (optional).
+    element_id:    Query correlation events for an element (optional).
+    action:        ``list`` (default) or ``events`` (correlation events query).
+
+Returns:
+    JSON: correlation policy sets, rules, and/or events.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `policy_set_id` | `str` | `''` |
+| `site_id` | `str` | `''` |
+| `element_id` | `str` | `''` |
+| `action` | `str` | `'list'` |
+
+### `sdwan_perf_mgmt`
+
+Read performance management configuration (policy sets, threshold profiles, probe configs).
+
+```
+Lists performance management policy sets for a tenant.  Use ``resource``
+to select the sub-resource type.
+
+Args:
+    tenant_id: TSG ID or settings key. Omit for default tenant.
+    resource:  ``policy_sets`` (default), ``threshold_profiles``, or
+               ``probe_configs``.
+
+Returns:
+    JSON: performance management configuration.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `resource` | `str` | `'policy_sets'` |
+
+### `sdwan_events_summary`
+
+Aggregated event summary — counts by severity, category, and type.
+
+```
+A lighter alternative to ``sdwan_events`` (which returns individual event
+records).  Uses the POST ``/events/summary`` endpoint for dashboard/SIEM
+consumption.
+
+Args:
+    tenant_id: TSG ID or settings key. Omit for default tenant.
+    hours:     Time window in hours (default 24).
+    category:  Filter by event category (optional).
+
+Returns:
+    JSON: event counts by severity and category.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `hours` | `int` | `24` |
+| `category` | `str` | `''` |
+
 ---
 
 ## Operational Visibility
@@ -2585,6 +3054,46 @@ Returns:
 | `tenant_id` | `str` | `''` |
 | `warn_days` | `int` | `90` |
 | `all_tenants` | `bool` | `False` |
+
+### `scm_renewal_brief`
+
+Generate a renewal-conversation brief: licences vs actual consumption.
+
+```
+Combines three data sources into one commercial view per tenant:
+subscription licences (contracted seats, consumption, expiry) from the
+Subscription Service API, bandwidth allocations per compute location
+from SCM config, and the live connected mobile-user count from the
+Insights v3.0 API.
+
+The brief flags where consumption contradicts the contract — products
+running OVERSUBSCRIBED (true-up / upsell conversation) or UNDERUSED
+(downsize risk at renewal) — lists everything expiring within the
+horizon, and generates ready-to-use talking points for the renewal
+or QBR conversation.
+
+Args:
+    tenant_id: SCM tenant ID (MSSP mode). Leave empty for the active
+               single-tenant client.
+    all_tenants: If True (MSSP mode), produce a combined brief for
+                 every configured tenant. Overrides tenant_id.
+    horizon_days: Renewal window — licences expiring within this many
+                  days are listed and raised as talking points
+                  (default 180).
+    underuse_pct: Consumption below this percentage of contracted
+                  seats is flagged UNDERUSED (default 40).
+
+Returns:
+    Markdown brief per tenant: renewal window table, consumption vs
+    contract table, capacity snapshot, and talking points.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `all_tenants` | `bool` | `False` |
+| `horizon_days` | `int` | `180` |
+| `underuse_pct` | `int` | `40` |
 
 ### `scm_tenant_dashboard`
 
@@ -3307,6 +3816,609 @@ Returns:
 
 ---
 
+## Adem
+
+_Autonomous Digital Experience Management (ADEM) — the `access/adem` family._
+
+### `scm_adem_query`
+
+Query Autonomous DEM (ADEM) telemetry — 13 views over `/adem/telemetry/v2/*`.
+
+```
+Views:
+    agent_properties — per-agent metadata (requires `filter`, e.g.
+        an agent_uuid expression).
+    agent_metric, agent_score — agent-level experience metrics/score
+        (also used internally by the AS-BUILT/MSR ADEM section).
+    application_metric, application_score — per-application experience.
+    internet_metric — internet-path quality metrics.
+    nav_traffic — browser navigation traffic volume.
+    route_hops — network path hop detail (`filter` must include
+        agent_uuid, site_id, or probe_uuid).
+    rum_metric, rum_score — Real User Monitoring (web app) metrics/score.
+    zoom_participant, zoom_participant_score, zoom_qos — Zoom
+        meeting quality telemetry.
+
+Args:
+    view: One of the views listed above.
+    tenant_id: SCM tenant ID (sent as the Prisma-Tenant header).
+    endpoint_type: muAgent | rnAgent | muProbe | rnProbe. Only some
+        views accept this — ignored (with a note) if the view
+        doesn't. Defaults to the view's first valid value.
+    response_type: timeseries | summary | distribution |
+        grouped-summary | grouped-timeseries | grouped-distribution.
+        Valid values vary per view; some views don't accept this
+        param at all. Defaults to "summary" if valid for the view,
+        else the view's first valid value.
+    timerange: ADEM timerange expression, e.g. last_3_day,
+        last_1_day, last_7_day (default last_3_day).
+    filter: Raw ADEM filter expression. Required for
+        agent_properties; route_hops needs one naming agent_uuid,
+        site_id, or probe_uuid.
+    group: Raw `group` expression for grouped response types
+        (e.g. "Entity.user").
+
+Returns:
+    Markdown with the JSON payload, or an actionable message on
+    4xx/5xx.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `view` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `endpoint_type` | `str` | `''` |
+| `response_type` | `str` | `''` |
+| `timerange` | `str` | `'last_3_day'` |
+| `filter` | `str` | `''` |
+| `group` | `str` | `''` |
+
+---
+
+## Cdl Logforwarding
+
+_MCP tools for CDL Log Forwarding profile management._
+
+### `scm_cdl_logforwarding`
+
+List CDL log-forwarding profiles (email, HTTPS, syslog).
+
+```
+Covers the CDL Log Forwarding API read surface:
+
+  - GET /logging-service/logforwarding/v1/email-profiles
+  - GET /logging-service/logforwarding/v1/https-profiles
+  - GET /logging-service/logforwarding/v1/syslog-profiles
+
+Each profile type supports list + get-by-ID.  Write operations
+(create/update/delete) are deferred behind the write-approval gate.
+
+Args:
+    tenant_id:    SCM tenant ID (MSSP mode). Omit for default tenant.
+    profile_type: ``"email"`` (default), ``"https"``, or ``"syslog"``.
+    profile_id:   If set, fetch a single profile by ID instead of listing.
+
+Returns:
+    JSON: profile list or single profile detail.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `profile_type` | `str` | `'email'` |
+| `profile_id` | `str` | `''` |
+
+---
+
+## Compliance
+
+_MCP tools for PAN Compliance Center API (released 2026-07-14)._
+
+### `scm_compliance_center`
+
+PAN Compliance Center — read-side analytics for compliance frameworks.
+
+```
+New API (released 2026-07-14). Requires the **Compliance Center** add-on
+licence. If your tenant is not yet provisioned, the tool returns a clear
+licence-hint message rather than a raw HTTP error.
+
+**Actions:**
+
+``list-frameworks`` — list all compliance frameworks (PCF/CCF).
+  Filters: `category` (PCF/CCF/all), `status_filter` (draft/released).
+
+``summaries`` — framework summaries with compliance scores, revision
+  state, and benchmark status. Filter: `product` (sase/ngfw/all).
+
+``scores`` — overall + industry compliance scores per product, with
+  per-category breakdown. Requires `framework_id`. Filter: `product`.
+
+``timeline`` — 30-day + 1-year compliance score trend. Requires
+  `framework_id`. Filter: `product`.
+
+``controls`` — per-control pass/fail counts with most-severe finding
+  severity (1=Informational, 3=Warning, 5=Critical) and compliance %.
+  Requires `framework_id`. Filter: `product`.
+
+``assessed`` — check, assessment, and exception counts. Requires
+  `framework_id`. Filter: `product`.
+
+``framework-detail`` — full framework hierarchy as JSON (view_aggregated
+  revision). Requires `framework_id`.
+
+``benchmark-monitoring`` — live BPC monitoring data with severity
+  breakdown and exception stats. Optional `request_body` JSON with
+  filters (product, bpc_status[], severity[], bpc_id[], object_type[],
+  etc. — see API spec). An empty body returns an unfiltered view.
+
+Args:
+    action: Which read operation to perform (see list above).
+    tenant_id: SCM tenant ID. Defaults to active tenant.
+    framework_id: Compliance framework ID (required for scores,
+                  timeline, controls, assessed, framework-detail).
+    product: Product filter — sase, ngfw, or all (default).
+    category: Framework category filter — PCF, CCF, or empty=all.
+    status_filter: Framework status — draft, released, or empty=all.
+    request_body: JSON string of filter criteria for benchmark-monitoring.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `action` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `framework_id` | `str` | `''` |
+| `product` | `str` | `'all'` |
+| `category` | `str` | `''` |
+| `status_filter` | `str` | `''` |
+| `request_body` | `str` | `''` |
+
+### `scm_compliance_framework`
+
+PAN Compliance Center — write-side framework CRUD.
+
+```
+New API (released 2026-07-14). Requires the **Compliance Center** add-on
+licence plus a role that permits framework authoring (most read-only
+service accounts will get 403 on write operations).
+
+**Actions:**
+
+``create`` — create a new compliance framework. Requires `payload_json`
+  (see API spec for ComplianceFrameworkRequest schema).
+
+``update`` — update an existing framework. Requires `framework_id` and
+  `payload_json`. Set `release=true` to release after update.
+
+``delete`` — permanently delete a framework and all its revisions.
+  Requires `framework_id`. **Destructive — cannot be undone.**
+
+``clone`` — clone a framework to a new one. Requires `framework_id`.
+
+``benchmark`` — mark a framework as a benchmark. Requires `framework_id`.
+
+``un-benchmark`` — remove the benchmark designation. Requires
+  `framework_id`.
+
+Args:
+    action: Which write operation to perform (see list above).
+    tenant_id: SCM tenant ID. Defaults to active tenant.
+    framework_id: Compliance framework ID (required for all actions
+                  except `create`).
+    payload_json: JSON string of the framework body for create/update.
+    release: Set to True to release the framework after update.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `action` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `framework_id` | `str` | `''` |
+| `payload_json` | `str` | `''` |
+| `release` | `bool` | `False` |
+
+---
+
+## Config Orch
+
+_MCP tools for Configuration Orchestration (site-based Remote Networks)._
+
+### `scm_config_orch_remote_networks`
+
+Manage Remote Network sites via the RNHP site-onboarding API.
+
+```
+Covers ``/v1/remote-networks`` and ``/v1/remote-networks-read`` plus
+``/v1/location-informations`` on the SASE config-orch API.
+
+This is the **partner-facing site provisioning API** — distinct from
+``scm_remote_network_list`` / ``scm_remote_network_get`` which read
+per-RN config from the SCM Config API.
+
+**Write safety (SSR pattern):**
+  - ``dry_run=True`` by default — returns planned state without applying
+  - ``ticket_ref`` is mandatory for create/update/delete
+  - Commit is a separate explicit ``scm_commit`` step
+
+Args:
+    tenant_id:   SCM tenant ID (MSSP mode). Omit for default tenant.
+    action:      ``list`` (default), ``get``, ``create``, ``update``, ``delete``.
+    resource_id: Remote network ID (required for get/update/delete).
+    body_json:   JSON payload for create/update (as a JSON string).
+    dry_run:     If True (default), validate without applying changes.
+    ticket_ref:  Mandatory change-ticket reference for write actions.
+
+Returns:
+    JSON: list, detail, or operation result with before/after diff.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `action` | `str` | `'list'` |
+| `resource_id` | `str` | `''` |
+| `body_json` | `str` | `''` |
+| `dry_run` | `bool` | `True` |
+| `ticket_ref` | `str` | `''` |
+
+### `scm_config_orch_bandwidth`
+
+Manage bandwidth allocations via the RNHP site-onboarding API.
+
+```
+Covers ``/v1/bandwidth-allocations`` and ``/v2/bandwidth-allocations``.
+v2 adds additional fields — default is v2.
+
+**Write safety (SSR pattern):** ``dry_run=True`` by default,
+``ticket_ref`` mandatory for create/update/delete.
+
+Args:
+    tenant_id:   SCM tenant ID (MSSP mode). Omit for default tenant.
+    action:      ``list`` (default), ``get``, ``create``, ``update``, ``delete``.
+    resource_id: Bandwidth allocation ID (required for get/update/delete).
+    api_version: ``v1`` or ``v2`` (default: v2).
+    body_json:   JSON payload for create/update.
+    dry_run:     If True (default), validate without applying.
+    ticket_ref:  Mandatory ticket reference for write actions.
+
+Returns:
+    JSON: list, detail, or operation result.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `action` | `str` | `'list'` |
+| `resource_id` | `str` | `''` |
+| `api_version` | `str` | `'v2'` |
+| `body_json` | `str` | `''` |
+| `dry_run` | `bool` | `True` |
+| `ticket_ref` | `str` | `''` |
+
+### `scm_config_orch_profiles`
+
+Manage IKE/IPSec crypto profiles and IKE gateways via the RNHP API.
+
+```
+Covers:
+  - ``/v1/ike-crypto-profiles`` (CRUD)
+  - ``/v1/ipsec-crypto-profiles`` (CRUD)
+  - ``/v1/ike-gateways-read`` (READ only — no create/update/delete paths)
+
+**Write safety (SSR pattern):** write actions (create/update/delete on
+crypto profiles) require ``ticket_ref`` and default to ``dry_run=True``.
+IKE gateways are read-only.
+
+Args:
+    tenant_id:    SCM tenant ID (MSSP mode). Omit for default tenant.
+    profile_type: ``ike-crypto`` (default), ``ipsec-crypto``, or ``ike-gateway``.
+    action:       ``list`` (default), ``get``. Also ``create``, ``update``,
+                  ``delete`` for crypto profiles only.
+    resource_id:  Profile/gateway ID (required for get/update/delete).
+    body_json:    JSON payload for create/update.
+    dry_run:      If True (default), validate without applying.
+    ticket_ref:   Mandatory ticket reference for write actions.
+
+Returns:
+    JSON: list, detail, or operation result.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `profile_type` | `str` | `'ike-crypto'` |
+| `action` | `str` | `'list'` |
+| `resource_id` | `str` | `''` |
+| `body_json` | `str` | `''` |
+| `dry_run` | `bool` | `True` |
+| `ticket_ref` | `str` | `''` |
+
+---
+
+## Csp Licensing
+
+_Palo Alto Networks Customer Support Portal (CSP) — Software NGFW flexible_
+
+### `scm_csp_licensing_query`
+
+Query the CSP Software NGFW flexible-licensing API (fwflex-service scope).
+
+```
+Credit-pool based (usage) licensing data for Software NGFW / VM-Series
+deployments — NOT a general CSP asset or case-management API (CSP's
+OAuth API Management page only exposes the fwflex-service scope).
+Read-only.
+
+Views:
+    credit_pools — all credit pools on the CSP account.
+    credit_pool — one credit pool (requires credit_pool_id).
+    deployment_profiles — deployment profiles (auth codes) in a
+        credit pool (requires credit_pool_id).
+    deployment_profile — one deployment profile (requires auth_code).
+    firewall_serial_numbers — firewall serials registered against an
+        auth code (requires auth_code).
+
+Args:
+    view: One of the views listed above.
+    credit_pool_id: Credit pool ID — required for credit_pool and
+        deployment_profiles.
+    auth_code: Deployment profile auth code — required for
+        deployment_profile and firewall_serial_numbers.
+
+Returns:
+    Markdown with the JSON payload, or an actionable message on
+    missing credentials/params or a 4xx/5xx.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `view` | `str` | `—` |
+| `credit_pool_id` | `str` | `''` |
+| `auth_code` | `str` | `''` |
+
+---
+
+## Dns Security
+
+_MCP tools for Advanced DNS Security domain operations._
+
+### `scm_dns_security_lookup`
+
+Query DNS domain info or submit a domain category change request.
+
+```
+Covers the PAN Advanced DNS Security API:
+
+  - POST /v1/domain/info          — query domain category/reputation
+  - POST /v1/domain/changerequest — submit a domain category change
+
+**change_request** is a write operation: ``ticket_ref`` is mandatory,
+and the Planner write-approval gate applies.
+
+Args:
+    tenant_id:       SCM tenant ID (MSSP mode). Omit for default tenant.
+    domain:          Domain name to query or submit a change for (required).
+    action:          ``"info"`` (default, read-only) or ``"changerequest"``.
+    change_action:   For changerequest: ``"add"`` or ``"remove"``.
+    change_category: For changerequest: target category (e.g. "malware").
+    ticket_ref:      Mandatory ticket/provenance reference for changerequest.
+
+Returns:
+    JSON with domain info or change request result.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `domain` | `str` | `''` |
+| `action` | `str` | `'info'` |
+| `change_action` | `str` | `''` |
+| `change_category` | `str` | `''` |
+| `ticket_ref` | `str` | `''` |
+
+---
+
+## Email Dlp
+
+_MCP tools for Email DLP incident and report access._
+
+### `scm_email_dlp_incidents`
+
+List Email DLP incidents or retrieve a specific incident / report.
+
+```
+Covers the Email DLP API (api.us-west1.email.dlp.paloaltonetworks.com):
+
+  - GET /incident/api/v1/incidents          — list incidents
+  - GET /incident/api/v1/incidents/{id}     — incident detail (when incident_id set)
+  - GET /report/api/v1/reports/{reportId}   — report retrieval (when report_id set)
+
+The API is read-only.  Incident status updates (PATCH) are deferred
+behind the write-approval gate.
+
+Args:
+    tenant_id:   SCM tenant ID (MSSP mode). Omit for default tenant.
+    incident_id: If set, fetch a single incident by ID instead of listing.
+    report_id:   If set, fetch a report by ID instead of listing incidents.
+    status:      Filter incidents by status (e.g. "open", "resolved").
+    limit:       Max incidents to return (default 50).
+
+Returns:
+    JSON: incident list, single incident, or report data.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `incident_id` | `str` | `''` |
+| `report_id` | `str` | `''` |
+| `status` | `str` | `''` |
+| `limit` | `int` | `50` |
+
+---
+
+## Insights
+
+_MCP tool for Prisma Access Insights — general-purpose query interface._
+
+### `scm_insights_query`
+
+Run an arbitrary Prisma Access Insights query.
+
+```
+Unlocks all 103 Insights paths (v1.0 / v2.0 / v3.0 + custom queries
++ scheduled exports) behind one general-purpose interface.
+
+**Common resource paths (v3.0):**
+- ``gp_mobileusers/connected_user_count`` — GP mobile user count
+- ``users/agent/connected_user_count`` — PA Agent connected users
+- ``gp_mobileusers/user_list`` — GP user list with locations
+- ``users/agent/user_list`` — PA Agent user list
+- ``pa_bandwidth_consumption`` — per-SPN bandwidth
+- ``agents/agent_versions`` — agent version distribution
+- ``tunnels/tunnel_list`` — IKE tunnel status (needs scope)
+
+**v2.0 / v1.0 format:**
+- ``query/{resource_name}`` — POST to named resource
+- ``custom/query/{feature}/{request}`` — custom query
+- ``download`` — export download
+
+**Scheduled exports (v2.0):**
+- ``export/schedule/query/{resource_name}`` — schedule an export
+- ``download/status`` — check download status
+
+Args:
+    resource: Insights resource path (everything after /query/ or
+        /resource/). E.g. ``gp_mobileusers/connected_user_count``.
+    tenant_id: SCM tenant ID. Defaults to active tenant.
+    body: JSON string of query filters (default ``{}``). The
+        Insights API uses a simple ``{"key": "value"}`` filter
+        format — see pan.dev for per-resource filter schemas.
+        When the body carries no ``filter``, a default
+        ``event_time last_n_hours`` window is assumed (see hours) —
+        several resources (the bandwidth/consumption family) reject
+        a query without a time window; if a resource instead rejects
+        the time filter, the call automatically retries without it.
+    api_version: API version — v1 | v2 | v3 (default v3).
+    region: X-PANW-Region override (europe, americas, uk, sg, au).
+        Defaults to tenant's insights_region.
+    hours: Size of the assumed time window in hours (default 24).
+        Ignored when the body already carries a ``filter``.
+
+Returns:
+    JSON with ``resource``, ``data`` array, ``region``, and the
+    ``time_window`` actually used.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `resource` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `body` | `str` | `''` |
+| `api_version` | `str` | `'v3'` |
+| `region` | `str` | `''` |
+| `hours` | `int` | `DEFAULT_WINDOW_HOURS` |
+
+### `scm_insights_export`
+
+Schedule, poll, or download an Insights scheduled export.
+
+```
+Handles the three-step Insights export workflow:
+
+  1. **schedule** — POST to ``export/schedule/query/{resource}`` (v2)
+     or ``export/query/{resource}`` (v3).  Returns a ``download_id``.
+  2. **status** — POST to ``download/status`` with the ``download_id``
+     to check whether the export is ready.
+  3. **download** — POST to ``download`` with the ``download_id``
+     to retrieve the exported data.
+
+**Example workflow (v2):**
+  1. schedule → get download_id "abc-123"
+  2. status with download_id="abc-123" → poll until ready
+  3. download with download_id="abc-123" → get the data
+
+Args:
+    resource:    Insights resource path to export (e.g.
+                 ``users/agent/user_list``, ``gp_mobileusers/user_list``).
+                 Required for ``schedule``; unused for status/download.
+    tenant_id:   SCM tenant ID. Defaults to active tenant.
+    body:        JSON query filter for the export (optional).
+    action:      ``schedule`` (default), ``status``, or ``download``.
+    download_id: The download ID returned by a previous ``schedule`` call.
+    api_version: API version for schedule — ``v2`` (default) or ``v3``.
+    region:      X-PANW-Region override.
+
+Returns:
+    JSON with the schedule response (including download_id), status,
+    or downloaded data.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `resource` | `str` | `''` |
+| `tenant_id` | `str` | `''` |
+| `body` | `str` | `''` |
+| `action` | `str` | `'schedule'` |
+| `download_id` | `str` | `''` |
+| `api_version` | `str` | `'v2'` |
+| `region` | `str` | `''` |
+
+---
+
+## Msr
+
+_MCP tool for the MSR — Monthly Service Review pack (``scm_msr_report``)._
+
+### `scm_msr_report`
+
+Generate the Monthly Service Review pack for a customer tenant.
+
+```
+Assembles the monthly customer deliverable from live tenant data:
+
+  1. Executive summary — ranked headline bullets (worst first)
+  2. Service statistics — incidents, MTTR, ack rate, commit count,
+     change failure rate, unique mobile users
+  3. Incidents raised in the period (severity-ranked)
+  4. Change record — config jobs in period + cumulative SSR ledger
+  5. Compliance posture — Silver+ (Gold adds the 30-day score trend)
+  6. Licence & renewal posture — expiry countdown within 180 days
+  7. Bandwidth vs allocation — per-RN-location usage over the month
+     compared against the region's allocated bandwidth
+  8. Mobile users — unique logins in period + location breakdown
+  9. Digital experience — ADEM agent scores (3-day telemetry window)
+  10. Security events — threats detected/blocked summary
+  11. Data-source coverage — what was gathered vs unavailable
+
+Every source degrades gracefully: an unavailable API costs one
+section (disclosed in §11), never the whole pack.
+
+Args:
+    tenant_id: SCM tenant ID. Defaults to the first configured tenant.
+    month: Review period as ``YYYY-MM`` (e.g. "2026-06"). Defaults to
+           the previous full calendar month.
+    mssp_name: Service-provider name for the header.
+    output_format: 'markdown' (default) or 'docx' (pandoc via the
+                   bundled pypandoc-binary).
+    save_to: Optional output path. Defaults for docx to
+             'reports/<tenant>-msr-<period>.docx'; markdown returns
+             inline unless a path is given.
+    include_insights: Set False to skip the Insights bandwidth/MU
+                      calls (faster; §7 is marked skipped).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenant_id` | `str` | `''` |
+| `month` | `str` | `''` |
+| `mssp_name` | `str` | `'MSSP'` |
+| `output_format` | `str` | `'markdown'` |
+| `save_to` | `str` | `''` |
+| `include_insights` | `bool` | `True` |
+
+---
+
 ## Mt Monitor
 
 _Cross-tenant aggregate monitoring — the `sase/mt-monitor` family._
@@ -3319,12 +4431,36 @@ Cross-tenant analytics aggregated over the MSP tenant hierarchy.
 Queries the MT Monitor aggregation API with `agg_by=tenant`, so a
 parent (MSSP) tenant answers for itself and all child tenants.
 
-Views:
+Views (round 1):
 - apps: total / risky / blocked application counts.
 - threats: total and blocked threat counts (Critical/High/Medium).
 - connectivity: site counts by node type and up/down state per
   child tenant.
 - incidents: raised incident counts by severity.
+
+Views (round 2 — 2026-07-15):
+- app-usage: per-app usage with category, risk level, user count.
+- url-logs: URL activity with category, action, count.
+- upgrades: device upgrade status (current → target version).
+- locations: user location list (GET — no query body).
+- licenses: custom license quota + utilization (GET — no query body).
+
+Views (round 3 — 2026-07-17):
+- alerts: alert feed with type, severity, status, tenant.
+- threat-list: per-threat detail with category and count.
+- threat-source: source IP/country breakdown for threats.
+- app-source: source IP breakdown per application.
+- incident-list: incident detail list with severity, status, domain.
+- incident-trends: incident count trends over time.
+- incident-tenants: incident count per tenant.
+- incident-impacted: impacted resources per incident.
+- service-health: CDL status, gateway status, top outliers, unique users.
+- url-summary: URL activity by category and action.
+- locations-tenants: user counts per tenant by country.
+- tenant-hierarchy: MSP tenant hierarchy tree (GET).
+- license-setup: license setup status (GET).
+- license-allocated: service connectivity license allocated (GET).
+- app-monitor: custom app monitor applications, node trends, tenants (GET).
 
 (applications/list and locationsUsers are omitted: both reject or
 500 on the spec's own example payloads — revisit on a spec update.)
@@ -3336,7 +4472,8 @@ answer — e.g. lab tenants that say `eu` may hold data in `uk`.
 
 Args:
     tenant_id: SCM tenant ID (MSSP parent).
-    view: apps | threats | connectivity | incidents.
+    view: apps | threats | connectivity | incidents | app-usage |
+        url-logs | upgrades | locations | licenses.
     days: Look-back window in days (default 7).
     region: CDL region override (de, americas, europe, uk, sg,
         ca, jp, au, in).
@@ -3454,6 +4591,155 @@ Returns:
 
 ---
 
+## Planner Tools
+
+_Planner Phase 3b — the conversational trigger surface, as MCP tools._
+
+### `scm_planner_run`
+
+Run an autonomous Planner agent against a natural-language goal.
+
+```
+The Planner (Claude as reasoning engine) decomposes the goal into an
+ordered plan of MCP tool calls from this server's manifest, executes
+them, revises on failures, and synthesizes an operator report. The
+plan, every tool call, and every result persist under plans/ with a
+full audit trail.
+
+SAFETY: write tools are NEVER executed unless you name them in
+approved_write_tools — that list is your explicit, per-run human
+approval. Anything not named is skipped, not run. Read-only goals
+need no approval at all.
+
+Requires anthropic_api_key in .secrets.toml (same credential as
+scm_ai_compliance_advisor).
+
+Args:
+    goal: The operator intent, in natural language (e.g. "check
+          which tenants have certificates expiring this quarter
+          and summarize per customer").
+    tenant_scope: Tenant TSG id, or "all" for estate-wide goals.
+                  Informs planning only — each step's params still
+                  name their tenant explicitly.
+    approved_write_tools: Write tools this run MAY execute (e.g.
+          ["scm_commit"]). Default none — fully read-only.
+    persona: Recorded on the plan for audit.
+
+Returns:
+    The plan_id and polling instructions. The run continues in the
+    background; call scm_planner_status(plan_id) for progress and
+    scm_planner_result(plan_id) for the final report.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `goal` | `str` | `—` |
+| `tenant_scope` | `str` | `'all'` |
+| `approved_write_tools` | `list[str] \| None` | `None` |
+| `persona` | `str` | `'conversational-operator'` |
+
+### `scm_planner_status`
+
+Show a Planner run's live progress, or list recent runs.
+
+```
+Args:
+    plan_id: The plan to inspect. Empty = list all persisted runs.
+
+Returns:
+    Step-by-step progress (status, retries, result summaries) for
+    one run, or the run list with statuses.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `plan_id` | `str` | `''` |
+
+### `scm_planner_result`
+
+Fetch a completed Planner run's synthesized report.
+
+```
+Args:
+    plan_id: The plan whose report to fetch.
+
+Returns:
+    The final Markdown report, or a status message if still running.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `plan_id` | `str` | `—` |
+
+### `scm_ir_trigger`
+
+Trigger incident-response triage from an alert payload.
+
+```
+Classifies the alert into an incident class (tunnel-down,
+cert-expiry, licence-expiry, config-change, connectivity-degraded,
+or generic) and runs that class's pre-built READ-ONLY triage template
+through the Planner loop — e.g. tunnel-down runs the SD-WAN WAN-IP
+summary, IKE gateway list, recent job audit, SD-WAN events, and the
+incident root-cause correlator. Templates cannot execute write tools
+under any input: the triage executor has no approver.
+
+This is the same surface the HTTP transport exposes at
+POST /webhook/ir for MT Monitor alert bridges.
+
+Args:
+    alert_json: The alert as a JSON object string — fields like
+        message/name/category/description drive classification
+        (e.g. '{"message": "IPSec tunnel down on branch-12"}').
+    tenant_id: SCM tenant ID the alert concerns.
+    folder: SCM folder for config-scoped triage steps.
+
+Returns:
+    The plan_id, detected incident class, and polling instructions
+    (scm_planner_status / scm_planner_result).
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `alert_json` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `folder` | `str` | `'Prisma Access'` |
+
+### `scm_estate_check`
+
+Run the tier-aware estate check across every configured tenant.
+
+```
+One trigger fans out per-tenant sub-plans with bounded concurrency
+through the Planner loop. Each tenant's contracted tier scopes its
+check depth — Bronze: licensing + certs + connectivity basics;
+Silver: + BPA posture + change audit; Gold: + NCSC CAF + ISO 27001 +
+DLP/SSPM posture. Cross-tenant anomaly rules then flag patterns
+invisible per-tenant (SD-WAN topology with zero licences, duplicate
+NFR licence sets, provisioned-but-idle tenants).
+
+Fully read-only: the estate executor has no approver, so no write
+tool can run. Gold-depth tenants take ~2-3 minutes each (one shared
+snapshot extraction feeds all three assessments); the run continues
+in the background and writes plans/estate-<stamp>.md.
+
+Args:
+    tenants: Comma-separated tenant labels to include (default: all
+             configured tenants).
+    concurrency: Parallel tenant sub-plans (default 3).
+
+Returns:
+    Launch confirmation with tenant count and where the digest will
+    land; follow per-tenant progress via scm_planner_status().
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `tenants` | `str` | `''` |
+| `concurrency` | `int` | `3` |
+
+---
+
 ## Service Status
 
 _Palo Alto Networks cloud service status — maintenance-window awareness._
@@ -3493,3 +4779,65 @@ Returns:
 | `days` | `int` | `14` |
 | `all_tenants` | `bool` | `False` |
 | `include_all_products` | `bool` | `False` |
+
+---
+
+## Ssr
+
+_MCP tool for SSR — Simple Service Requests (restricted customer-change CRUD)._
+
+### `scm_ssr_execute`
+
+SSR — Simple Service Request (restricted customer-change CRUD).
+
+```
+Machine-first, idempotent tool for the three commonest MSSP change
+requests.  Only touches objects named in the per-tenant ``ssr_objects``
+allowlist (settings.toml).  Never edits a rulebase directly.
+
+**Operations:**
+
+``url-allow-list`` — Add/remove a URL in a designated SSR-managed custom
+  URL category (``SSR-Allow-List``).
+
+``url-block-list`` — Add/remove a URL in a designated SSR-managed custom
+  URL category (``SSR-Block-List``).
+
+``threat-exception`` — Add/remove a threat ID in the ``threat_exception``
+  list of the SSR-managed anti-spyware and/or vulnerability protection
+  profiles.
+
+``ssl-decrypt-exclude`` — Add/remove a URL category name on the
+  SSR-managed no-decrypt rule's ``category`` list.
+
+**Idempotent guarantees:**
+- Re-adding an existing entry → ``already_present: true``
+- Removing a non-existent entry → ``already_absent: true``
+- Safe under orchestrator retries
+
+**Dry-run (default):** Returns a before/after diff in JSON. Set
+``dry_run=False`` to apply changes.  Commit stays a separate
+``scm_commit`` step — SSR never auto-commits.
+
+Args:
+    operation: One of ``url-allow-list``, ``url-block-list``,
+               ``threat-exception``, ``ssl-decrypt-exclude``.
+    target: The URL, threat ID, or URL category name to operate on.
+    ticket_ref: Mandatory ticket/change reference (e.g. INC-12345).
+        Echoed into object descriptions and returned in the response.
+    tenant_id: SCM tenant ID. Defaults to active tenant.
+    folder: SCM folder. Defaults to the tenant's default_folder.
+    action: ``add`` (default) or ``remove``.
+    dry_run: If True (default), return a before/after diff without
+             making changes. Set to False to apply.
+```
+
+| Parameter | Type | Default |
+|-----------|------|---------|
+| `operation` | `str` | `—` |
+| `target` | `str` | `—` |
+| `ticket_ref` | `str` | `—` |
+| `tenant_id` | `str` | `''` |
+| `folder` | `str` | `''` |
+| `action` | `str` | `'add'` |
+| `dry_run` | `bool` | `True` |

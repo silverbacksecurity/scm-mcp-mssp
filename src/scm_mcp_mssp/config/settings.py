@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     scm_tenant_id: str = Field("", description="Default SCM tenant/TSG ID")
     scm_default_folder: str = Field("Shared", description="Default SCM folder")
 
+    # ── CSP (Customer Support Portal) — Software NGFW flexible licensing ───
+    # A single global credential per CSP account (unlike scm_client_id/secret
+    # above, this is not per-managed-tenant). Generated in CSP → Account
+    # Management → OAuth API Management → fwflex-service scope.
+    csp_client_id: str = Field("", description="CSP OAuth2 client ID (fwflex-service scope)")
+    csp_client_secret: SecretStr = Field(
+        SecretStr(""), description="CSP OAuth2 client secret (fwflex-service scope)"
+    )
+
     # ── AI advisor ─────────────────────────────────────────────────────────
     anthropic_api_key: SecretStr = Field(
         SecretStr(""),

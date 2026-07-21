@@ -366,6 +366,18 @@ scm_create_nist_snippet:
   idempotent: false
   retry_policy: fail_fast
   scope: tenant
+scm_csp_licensing_query:
+  access: read
+  domain: licensing
+  idempotent: true
+  retry_policy: retry
+  scope: cross_tenant
+  known_failure_modes: 'Software NGFW flexible/credit-based licensing only
+    (fwflex-service CSP OAuth scope) - NOT a general CSP asset or case
+    management API. Uses a single global CSP account credential, not a
+    managed tenant''s SCM OAuth, so results are independent of the `tenant`
+    argument. A 401 means the CSP client_id/secret are stale or the
+    fwflex-service scope was revoked, not a bad managed-tenant token.'
 scm_decrypt_policy_audit:
   access: read
   domain: threat_coverage

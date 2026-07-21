@@ -29,6 +29,7 @@ from .tools.audit import register_audit_tools
 from .tools.cdl_logforwarding import register_cdl_logforwarding_tools
 from .tools.compliance import register_compliance_tools
 from .tools.config_orch import register_config_orch_tools
+from .tools.csp_licensing import register_csp_licensing_tools
 from .tools.deployment import register_deployment_tools
 from .tools.dlp import register_dlp_tools
 from .tools.dns_security import register_dns_security_tools
@@ -185,6 +186,7 @@ def register_all_tools(
     register_insights_tools(mcp, get_client)
     register_mt_monitor_tools(mcp, get_client)
     register_adem_tools(mcp, get_client)
+    register_csp_licensing_tools(mcp)
 
 
 def create_server() -> FastMCP:
