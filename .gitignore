@@ -41,6 +41,9 @@ backups/
 baselines/
 plans/
 
+# CLI action history — records tenant ids/labels for actions run
+logs/
+
 # Testing / quality
 .coverage
 .pytest_cache/

@@ -24,6 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .config.settings import TenantConfig, load_all_tenant_configs
+from .history import audited, log_action, read_history
 
 console = Console()
 
@@ -331,6 +332,7 @@ def _print_main_menu(tenant: TenantConfig | None) -> None:
                 ("A", "Add Tenant", "Add a new tenant to settings.toml / .secrets.toml"),
                 ("U", "Check for Updates", "pan-scm-sdk, prisma-sase, MCP — PyPI + pan.dev"),
                 ("R", "Restart MCP Server", "Send SIGTERM and restart scm-mcp / scm-mcp-http"),
+                ("H", "History", "Recent backups, reports, tenant changes — audit trail"),
                 ("0", "Exit", ""),
             ]
         )
@@ -349,99 +351,24 @@ def _require_tenant(tenant: TenantConfig | None) -> TypeGuard[TenantConfig]:
     return True
 
 
+@audited("backup")
 def _op_backup(tenant: TenantConfig) -> None:
-    from .audit.extractor import extract_sdwan_snapshot, extract_snapshot
-    from .auth.oauth import get_scm_client
-    from .auth.sdwan import get_sdwan_client
+    from .cli_ops import run_backup
 
     console.print(f"\n[cyan]Connecting to [bold]{tenant.label}[/bold]...[/cyan]")
     try:
-        client = get_scm_client(tenant)
+        result = run_backup(tenant, on_progress=lambda m: console.print(f"  {m}"))
     except Exception as exc:
-        console.print(f"[red]Auth failed: {exc}[/red]")
+        console.print(f"[red]Error: {_exc_str(exc)}[/red]")
         Prompt.ask("\nPress Enter to continue")
         return
 
-    with console.status("[cyan]Extracting Prisma Access config...[/cyan]"):
-        snap = extract_snapshot(client, "All", tenant.tenant_id)
-
     console.print(
-        f"  [green]✓[/green] Prisma Access: "
-        f"addresses={len(snap.addresses)}, "
-        f"rules={len(snap.security_rules_pre) + len(snap.security_rules_post)}, "
-        f"nat={len(snap.nat_rules)}, "
-        f"remote_networks={len(snap.remote_networks)}, "
-        f"svc_conn={len(snap.service_connections)}"
+        f"\n  [bold green]Backup written:[/bold green] {result.path}  ({result.size_kb} KB)"
     )
-
-    with console.status("[cyan]Connecting SD-WAN...[/cyan]"):
-        try:
-            sdwan = get_sdwan_client(tenant)
-            extract_sdwan_snapshot(sdwan, snap)
-            console.print(
-                f"  [green]✓[/green] SD-WAN: "
-                f"sites={len(snap.sdwan_sites)}, "
-                f"elements={len(snap.sdwan_elements)}, "
-                f"wan_networks={len(snap.sdwan_wan_networks)}, "
-                f"path_groups={len(snap.sdwan_path_groups)}"
-            )
-        except Exception as exc:
-            console.print(f"  [yellow]⚠[/yellow] SD-WAN unavailable: {exc}")
-
-    backup_dir = Path("backups")
-    backup_dir.mkdir(exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = backup_dir / f"scm_backup_{tenant.tenant_id}_{ts}.json"
-    payload = {
-        "backup_version": "1",
-        "generated_at": datetime.now(UTC).isoformat(),
-        "tenant_id": tenant.tenant_id,
-        "label": tenant.label,
-        "folder": "All",
-        "resources": {
-            "addresses": snap.addresses,
-            "address_groups": snap.address_groups,
-            "services": snap.services,
-            "service_groups": snap.service_groups,
-            "tags": snap.tags,
-            "edls": snap.edls,
-            "applications": snap.applications,
-            "application_groups": snap.application_groups,
-            "hip_objects": snap.hip_objects,
-            "hip_profiles": snap.hip_profiles,
-            "anti_spyware_profiles": snap.anti_spyware_profiles,
-            "vulnerability_profiles": snap.vulnerability_profiles,
-            "url_categories": snap.url_categories,
-            "wildfire_profiles": snap.wildfire_profiles,
-            "dns_security_profiles": snap.dns_security_profiles,
-            "decryption_profiles": snap.decryption_profiles,
-            "file_blocking_profiles": snap.file_blocking_profiles,
-            "log_forwarding_profiles": snap.log_forwarding_profiles,
-            "syslog_profiles": snap.syslog_profiles,
-            "security_rules_pre": snap.security_rules_pre,
-            "security_rules_post": snap.security_rules_post,
-            "nat_rules": snap.nat_rules,
-            "decryption_rules": snap.decryption_rules,
-            "app_override_rules": snap.app_override_rules,
-            "zones": snap.zones,
-            "ike_gateways": snap.ike_gateways,
-            "ipsec_tunnels": snap.ipsec_tunnels,
-            "zone_protection_profiles": snap.zone_protection_profiles,
-            "remote_networks": snap.remote_networks,
-            "service_connections": snap.service_connections,
-            "sdwan_sites": snap.sdwan_sites,
-            "sdwan_elements": snap.sdwan_elements,
-            "sdwan_wan_networks": snap.sdwan_wan_networks,
-            "sdwan_path_groups": snap.sdwan_path_groups,
-        },
-        "extraction_errors": snap.extraction_errors,
-    }
-    out.write_text(json.dumps(payload, indent=2, default=str))
-    size_kb = out.stat().st_size // 1024
-    console.print(f"\n  [bold green]Backup written:[/bold green] {out}  ({size_kb} KB)")
-    if snap.extraction_errors:
-        console.print(f"  [yellow]Warnings ({len(snap.extraction_errors)}):[/yellow]")
-        for e in snap.extraction_errors[:5]:
+    if result.extraction_errors:
+        console.print(f"  [yellow]Warnings ({len(result.extraction_errors)}):[/yellow]")
+        for e in result.extraction_errors[:5]:
             console.print(f"    [dim]{e[:120]}[/dim]")
     Prompt.ask("\nPress Enter to continue")
 
@@ -652,36 +579,22 @@ def _op_select_tenant(tenants: dict[str, TenantConfig]) -> TenantConfig | None:
     return None
 
 
+@audited("bpa")
 def _op_bpa(tenant: TenantConfig) -> None:
-    from collections import Counter
-
-    from .audit.bpa_checks import run_all_checks
-    from .audit.extractor import extract_snapshot
     from .audit.models import Status
-    from .auth.oauth import get_scm_client
+    from .cli_ops import run_bpa
 
     console.print(f"\n[cyan]Connecting to [bold]{tenant.label}[/bold]...[/cyan]")
     try:
-        client = get_scm_client(tenant)
+        with console.status("[cyan]Running BPA checks...[/cyan]"):
+            result = run_bpa(tenant)
     except Exception as exc:
-        console.print(f"[red]Auth failed: {exc}[/red]")
+        console.print(f"[red]Error: {_exc_str(exc)}[/red]")
         Prompt.ask("\nPress Enter to continue")
         return
 
-    folder = tenant.default_folder or "All"
-    with console.status(f"[cyan]Extracting config from [bold]{folder}[/bold]...[/cyan]"):
-        snap = extract_snapshot(client, folder, tenant.tenant_id)
-
-    with console.status("[cyan]Running BPA checks...[/cyan]"):
-        findings = run_all_checks(snap)
-
-    counts = Counter(f.status.value for f in findings)
-    sev_counts: dict[str, dict[str, int]] = {}
-    for f in findings:
-        sev_counts.setdefault(f.severity.value, {"pass": 0, "fail": 0, "warn": 0, "skip": 0})
-        sev_counts[f.severity.value][f.status.value] = (
-            sev_counts[f.severity.value].get(f.status.value, 0) + 1
-        )
+    findings = result.findings
+    counts = result.counts
 
     # Summary panel
     summary = (
@@ -725,37 +638,13 @@ def _op_bpa(tenant: TenantConfig) -> None:
     else:
         console.print("[green]  ✓ No failed or warned checks.[/green]")
 
-    # Save JSON report
-    backup_dir = Path("backups")
-    backup_dir.mkdir(exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = backup_dir / f"bpa_{tenant.tenant_id}_{ts}.json"
-    import json as _json
-
-    out.write_text(
-        _json.dumps(
-            {
-                "tenant_id": tenant.tenant_id,
-                "label": tenant.label,
-                "folder": folder,
-                "timestamp": ts,
-                "summary": dict(counts),
-                "findings": [f.to_dict() for f in findings],
-            },
-            indent=2,
-        )
-    )
-    console.print(f"\n  [bold green]Report saved:[/bold green] {out}")
+    console.print(f"\n  [bold green]Report saved:[/bold green] {result.path}")
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("ncsc")
 def _op_ncsc(tenant: TenantConfig) -> None:
-    import json as _json
-
-    from .audit.bpa_checks import run_all_checks
-    from .audit.extractor import extract_snapshot
-    from .audit.ncsc_controls import NCSC_CONTROLS
-    from .auth.oauth import get_scm_client
+    from .cli_ops import NCSC_FRAMEWORK_LABELS, run_ncsc
 
     # Framework picker
     console.print()
@@ -772,70 +661,22 @@ def _op_ncsc(tenant: TenantConfig) -> None:
     fw_choice = Prompt.ask("Framework", default="1").strip()
     fw_map = {"1": "all", "2": "caf", "3": "ce", "4": "10steps"}
     framework = fw_map.get(fw_choice, "all")
-    fw_label_map = {
-        "all": "All Frameworks",
-        "caf": "CAF v4.0",
-        "ce": "Cyber Essentials v3.2",
-        "10steps": "10 Steps",
-    }
-    fw_label = fw_label_map[framework]
+    fw_label = NCSC_FRAMEWORK_LABELS[framework]
 
     console.print(f"\n[cyan]Connecting to [bold]{tenant.label}[/bold]...[/cyan]")
     try:
-        client = get_scm_client(tenant)
+        with console.status("[cyan]Running BPA + NCSC mapping...[/cyan]"):
+            result = run_ncsc(tenant, framework)
     except Exception as exc:
-        console.print(f"[red]Auth failed: {exc}[/red]")
+        console.print(f"[red]Error: {_exc_str(exc)}[/red]")
         Prompt.ask("\nPress Enter to continue")
         return
 
-    folder = tenant.default_folder or "All"
-    with console.status(f"[cyan]Extracting config from [bold]{folder}[/bold]...[/cyan]"):
-        snap = extract_snapshot(client, folder, tenant.tenant_id)
-
-    with console.status("[cyan]Running BPA + NCSC mapping...[/cyan]"):
-        findings = run_all_checks(snap)
-
-        framework_filter = {
-            "caf": "CAF v4.0",
-            "ce": "CE v3.2",
-            "10steps": "10 Steps",
-            "nsf": "NSF",
-        }.get(framework, "")
-
-        ctrl_status: dict[str, list[dict[str, Any]]] = {k: [] for k in NCSC_CONTROLS}
-        for f in findings:
-            for ref in f.ncsc_refs:
-                if ref in ctrl_status:
-                    ctrl_status[ref].append(f.to_dict())
-
-        controls_output: list[dict[str, Any]] = []
-        for ctrl_id, ctrl in NCSC_CONTROLS.items():
-            if framework_filter and ctrl.source != framework_filter:
-                continue
-            related = ctrl_status[ctrl_id]
-            has_fail = any(f["status"] in ("fail", "warn") for f in related)
-            has_pass = any(f["status"] == "pass" for f in related)
-            compliance = (
-                "non-compliant" if has_fail else ("compliant" if has_pass else "not-assessed")
-            )
-            controls_output.append(
-                {
-                    "control_id": ctrl_id,
-                    "title": ctrl.title,
-                    "source": ctrl.source,
-                    "objective": ctrl.objective,
-                    "compliance_status": compliance,
-                    "related_findings": [
-                        {"check_id": f["check_id"], "status": f["status"], "title": f["title"]}
-                        for f in related
-                    ],
-                }
-            )
-
-    compliant = sum(1 for c in controls_output if c["compliance_status"] == "compliant")
-    non_compliant = sum(1 for c in controls_output if c["compliance_status"] == "non-compliant")
-    not_assessed = sum(1 for c in controls_output if c["compliance_status"] == "not-assessed")
-    total = len(controls_output)
+    controls_output = result.controls
+    compliant = result.compliant
+    non_compliant = result.non_compliant
+    not_assessed = result.not_assessed
+    total = result.total
 
     summary = (
         f"[bold]{fw_label}[/bold]  ·  [bold]Total:[/bold] {total}  "
@@ -873,50 +714,13 @@ def _op_ncsc(tenant: TenantConfig) -> None:
         )
     console.print(t)
 
-    backup_dir = Path("backups")
-    backup_dir.mkdir(exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = backup_dir / f"ncsc_{tenant.tenant_id}_{framework}_{ts}.json"
-    out.write_text(
-        _json.dumps(
-            {
-                "tenant_id": tenant.tenant_id,
-                "label": tenant.label,
-                "folder": folder,
-                "framework": framework,
-                "timestamp": ts,
-                "summary": {
-                    "total": total,
-                    "compliant": compliant,
-                    "non_compliant": non_compliant,
-                    "not_assessed": not_assessed,
-                },
-                "controls": controls_output,
-            },
-            indent=2,
-        )
-    )
-    console.print(f"\n  [bold green]Report saved:[/bold green] {out}")
+    console.print(f"\n  [bold green]Report saved:[/bold green] {result.path}")
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("asbuilt_report")
 def _op_asbuilt_report(tenant: TenantConfig) -> None:
-    from .audit.asbuilt_report import AsBuiltReportBuilder
-    from .audit.extractor import (
-        extract_airs,
-        extract_allocated_ips,
-        extract_browser,
-        extract_casb_dlp,
-        extract_cdl,
-        extract_enterprise_dlp,
-        extract_licenses,
-        extract_ngfw_devices,
-        extract_sdwan_snapshot,
-        extract_snapshot,
-        extract_ztna_connectors,
-    )
-    from .auth.oauth import get_scm_client
-    from .auth.sdwan import get_sdwan_client
+    from .cli_ops import run_asbuilt
 
     # ── config state ─────────────────────────────────────────────────────────
     inc_prisma = True
@@ -1006,120 +810,42 @@ def _op_asbuilt_report(tenant: TenantConfig) -> None:
         elif choice == "G":
             break
 
-    # Determine folder from component selection
-    if inc_prisma and inc_ngfw:
-        folder = "All"
-    elif inc_ngfw:
-        folder = "ngfw-shared"
-    elif inc_prisma:
-        folder = "Prisma Access"
-    else:
-        folder = tenant.default_folder or "All"
-
     console.print(f"\n[cyan]Connecting to [bold]{tenant.label}[/bold]...[/cyan]")
     try:
-        client = get_scm_client(tenant)
+        with console.status("[cyan]Working...[/cyan]"):
+            result = run_asbuilt(
+                tenant,
+                inc_prisma=inc_prisma,
+                inc_sdwan=inc_sdwan,
+                inc_ngfw=inc_ngfw,
+                output_format=output_format,
+                customer_name=customer_name,
+                mssp_name=mssp_name,
+                doc_version=doc_version,
+                on_progress=lambda m: console.print(f"  {m}"),
+            )
     except Exception as exc:
-        console.print(f"[red]Auth failed: {exc}[/red]")
+        console.print(f"[red]Error: {_exc_str(exc)}[/red]")
         Prompt.ask("\nPress Enter to continue")
         return
 
-    with console.status(f"[cyan]Extracting config from [bold]{folder}[/bold]...[/cyan]"):
-        snap = extract_snapshot(client, folder, tenant.tenant_id)
-        extract_licenses(client, snap)
-        extract_allocated_ips(client, snap)
-
-    # Extended SASE components — run separately so the main extract doesn't time out
-    with console.status(
-        "[cyan]Extracting CASB/DLP, ZTNA, Browser, CDL, NGFW, AIRS, Enterprise DLP...[/cyan]"
-    ):
-        extract_casb_dlp(client, snap, folder=folder)
-        extract_ztna_connectors(client, snap)
-        extract_browser(client, snap)
-        extract_cdl(client, snap)
-        extract_ngfw_devices(client, snap)
-        extract_airs(client, snap)
-        extract_enterprise_dlp(client, snap)
-
-    if inc_sdwan:
-        with console.status("[cyan]Connecting SD-WAN...[/cyan]"):
-            try:
-                sdwan = get_sdwan_client(tenant)
-                extract_sdwan_snapshot(sdwan, snap)
-                console.print(
-                    f"  [green]✓[/green] SD-WAN: sites={len(snap.sdwan_sites)}, elements={len(snap.sdwan_elements)}"
-                )
-            except Exception as exc:
-                console.print(f"  [yellow]⚠[/yellow] SD-WAN unavailable: {exc}")
-
-    # Fetch SCM job history for Appendix E (same logic as scm_asbuilt_report MCP tool)
-    _jobs: list[Any] = []
-    try:
-        _job_resp = client.list_jobs(limit=200, offset=0)
-        _all_jobs = _job_resp.data if hasattr(_job_resp, "data") else []
-        for j in _all_jobs:
-            parent = str(getattr(j, "parent_id", "") or "")
-            if parent not in ("0", "", "None"):
-                continue
-            _jobs.append(
-                {
-                    "job_id": str(getattr(j, "id", "")),
-                    "type": str(getattr(j, "type_str", getattr(j, "job_type", ""))),
-                    "result": str(getattr(j, "result_str", "")),
-                    "user": str(getattr(j, "uname", "")),
-                    "description": str(getattr(j, "description", "") or ""),
-                    "start_ts": str(getattr(j, "start_ts", "")),
-                    "end_ts": str(getattr(j, "end_ts", "")),
-                    "parent_id": parent,
-                }
-            )
-    except Exception as _je:
-        console.print(f"  [yellow]⚠[/yellow] Could not fetch job history: {_je}")
-
-    with console.status("[cyan]Building AS-BUILT document...[/cyan]"):
-        builder = AsBuiltReportBuilder(
-            snap,
-            customer_name=customer_name,
-            mssp_name=mssp_name,
-            doc_version=doc_version,
-            jobs=_jobs,
-        )
-        report_md = builder.to_markdown()
-
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    safe_customer = customer_name.replace(" ", "-").replace("/", "-")
-
-    if output_format == "docx":
-        out = reports_dir / f"{safe_customer}-asbuilt-{ts}.docx"
-        with console.status("[cyan]Converting to DOCX (pandoc)...[/cyan]"):
-            from .tools.audit import _md_to_docx
-
-            result = _md_to_docx(report_md, out)
-        # _md_to_docx returns the output path on success, or an error message
-        # (e.g. "pandoc not found ...") — in that case keep the markdown.
-        if out.exists():
-            console.print(f"\n  [bold green]DOCX saved:[/bold green] {result}")
-        else:
-            console.print(f"\n  [yellow]DOCX conversion failed:[/yellow] {result}")
-            md_out = reports_dir / f"{safe_customer}-asbuilt-{ts}.md"
-            md_out.write_text(report_md)
-            console.print(f"  [bold green]Markdown saved instead:[/bold green] {md_out}")
+    if result.output_format == "docx":
+        console.print(f"\n  [bold green]DOCX saved:[/bold green] {result.path}")
     else:
-        out = reports_dir / f"{safe_customer}-asbuilt-{ts}.md"
-        out.write_text(report_md)
-        size_kb = out.stat().st_size // 1024
-        console.print(f"\n  [bold green]Markdown saved:[/bold green] {out}  ({size_kb} KB)")
-
-    if snap.extraction_errors:
-        console.print(f"  [yellow]Warnings ({len(snap.extraction_errors)}):[/yellow]")
-        for e in snap.extraction_errors[:3]:
+        console.print(
+            f"\n  [bold green]Markdown saved:[/bold green] {result.path}  ({result.size_kb} KB)"
+        )
+    if result.docx_error:
+        console.print(f"  [yellow]DOCX conversion failed:[/yellow] {result.docx_error}")
+    if result.extraction_errors:
+        console.print(f"  [yellow]Warnings ({len(result.extraction_errors)}):[/yellow]")
+        for e in result.extraction_errors[:3]:
             console.print(f"    [dim]{e[:120]}[/dim]")
 
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("sdwan_topology")
 def _op_sdwan_topology(tenant: TenantConfig) -> None:
     from .audit.sdwan_topo import build_topology, topology_to_mermaid
     from .auth.sdwan import get_sdwan_client, safe_items
@@ -1333,11 +1059,9 @@ def _op_sdwan_topology(tenant: TenantConfig) -> None:
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("audit_report")
 def _op_audit_report(tenant: TenantConfig) -> None:
-    from .audit.bpa_checks import run_all_checks
-    from .audit.extractor import extract_snapshot
-    from .audit.report import ReportBuilder
-    from .auth.oauth import get_scm_client
+    from .cli_ops import run_audit_report
 
     # Format picker
     console.print()
@@ -1351,50 +1075,32 @@ def _op_audit_report(tenant: TenantConfig) -> None:
     )
     fmt_choice = Prompt.ask("Format", default="1").strip()
     output_format = "json" if fmt_choice == "2" else "markdown"
-    ext = "json" if output_format == "json" else "md"
 
     console.print(f"\n[cyan]Connecting to [bold]{tenant.label}[/bold]...[/cyan]")
     try:
-        client = get_scm_client(tenant)
+        with console.status("[cyan]Building report...[/cyan]"):
+            result = run_audit_report(tenant, output_format)
     except Exception as exc:
-        console.print(f"[red]Auth failed: {exc}[/red]")
+        console.print(f"[red]Error: {_exc_str(exc)}[/red]")
         Prompt.ask("\nPress Enter to continue")
         return
 
-    folder = tenant.default_folder or "All"
-    with console.status(f"[cyan]Extracting config from [bold]{folder}[/bold]...[/cyan]"):
-        snap = extract_snapshot(client, folder, tenant.tenant_id)
-
-    with console.status("[cyan]Running BPA checks...[/cyan]"):
-        findings = run_all_checks(snap)
-
-    with console.status("[cyan]Building report...[/cyan]"):
-        builder = ReportBuilder(snap, findings)
-        report = builder.to_json() if output_format == "json" else builder.to_markdown()
-
-    # Mini summary
-    from collections import Counter
-
-    counts = Counter(f.status.value for f in findings)
+    counts = result.counts
     summary = (
-        f"[bold]Checks:[/bold] {len(findings)}  "
+        f"[bold]Checks:[/bold] {sum(counts.values())}  "
         f"[green]Pass: {counts.get('pass', 0)}[/green]  "
         f"[red]Fail: {counts.get('fail', 0)}[/red]  "
         f"[yellow]Warn: {counts.get('warn', 0)}[/yellow]"
     )
     console.print(Panel(summary, title="Audit Summary", box=box.ROUNDED, border_style="cyan"))
 
-    # Save
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
-    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    out = reports_dir / f"audit_{tenant.tenant_id}_{ts}.{ext}"
-    out.write_text(report)
-    size_kb = out.stat().st_size // 1024
-    console.print(f"\n  [bold green]Report saved:[/bold green] {out}  ({size_kb} KB)")
+    console.print(
+        f"\n  [bold green]Report saved:[/bold green] {result.path}  ({result.size_kb} KB)"
+    )
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("config_diff")
 def _op_config_diff(tenant: TenantConfig) -> None:
     backup_dir = Path("backups")
     backups = sorted(backup_dir.glob(f"scm_backup_{tenant.tenant_id}_*.json"), reverse=True)
@@ -1650,6 +1356,7 @@ def _op_check_updates() -> None:
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("restart_server")
 def _op_restart_server() -> None:
     """Find and restart the running scm-mcp or scm-mcp-http process."""
     import os
@@ -1757,6 +1464,40 @@ def _op_restart_server() -> None:
     Prompt.ask("\nPress Enter to continue")
 
 
+def _op_history() -> None:
+    """Render the CLI action history — backups, reports, tenant changes."""
+    console.print()
+    entries = read_history(50)
+    if not entries:
+        console.print("[yellow]No history yet.[/yellow]")
+        Prompt.ask("\nPress Enter to continue")
+        return
+
+    t = Table(box=box.SIMPLE_HEAD, border_style="dim", show_lines=False)
+    t.add_column("Time (UTC)", style="dim", width=20)
+    t.add_column("Source", width=6)
+    t.add_column("Tenant", style="white")
+    t.add_column("Action", style="cyan")
+    t.add_column("Status", width=8)
+    t.add_column("Detail", style="dim")
+
+    status_styles = {"ok": "[green]OK[/green]", "error": "[red]ERROR[/red]"}
+    for e in entries:
+        ts = str(e.get("ts", ""))[:19].replace("T", " ")
+        t.add_row(
+            ts,
+            str(e.get("source", "")),
+            str(e.get("tenant_label") or "—"),
+            str(e.get("action", "")),
+            status_styles.get(e.get("status", ""), str(e.get("status", ""))),
+            str(e.get("detail", ""))[:60],
+        )
+    console.print(t)
+    console.print(f"[dim]{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}[/dim]")
+    Prompt.ask("\nPress Enter to continue")
+
+
+@audited("dspt")
 def _op_dspt(tenant: TenantConfig) -> None:
     import json as _json
 
@@ -1917,6 +1658,7 @@ def _op_dspt(tenant: TenantConfig) -> None:
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("aiops_bpa")
 def _op_aiops_bpa(tenant: TenantConfig) -> None:
     import time
 
@@ -2091,6 +1833,7 @@ def _op_aiops_bpa(tenant: TenantConfig) -> None:
     Prompt.ask("\nPress Enter to continue")
 
 
+@audited("incidents")
 def _op_incidents(tenant: TenantConfig) -> None:
     from .auth.oauth import get_scm_client
 
@@ -2192,6 +1935,12 @@ def _op_not_implemented(name: str) -> None:
 
 
 def main() -> None:
+    if sys.argv[1:]:
+        from .cli_commands import build_parser, dispatch
+
+        args = build_parser().parse_args()
+        sys.exit(dispatch(args))
+
     from .cli_menus import (
         _menu_audit_compliance,
         _menu_config_inventory,
@@ -2310,8 +2059,11 @@ def main() -> None:
             selected = _op_select_tenant(tenants)
             if selected:
                 active = selected
+                log_action("select_tenant", selected.tenant_id, selected.label, "ok")
                 console.print(f"\n[bold green]Active tenant set to: {active.label}[/bold green]")
                 Prompt.ask("\nPress Enter to continue")
+            else:
+                log_action("select_tenant", None, None, "ok", detail="cancelled")
 
         elif choice in ("a", "A"):
             _print_banner(active)
@@ -2321,6 +2073,7 @@ def main() -> None:
                 new_key, new_tc = result
                 tenants[new_key] = new_tc
                 active = new_tc
+                log_action("add_tenant", new_tc.tenant_id, new_tc.label, "ok")
                 console.print(f"[bold green]Active tenant switched to: {new_tc.label}[/bold green]")
 
         elif choice in ("u", "U"):
@@ -2332,6 +2085,11 @@ def main() -> None:
             _print_banner(active)
             console.rule("[cyan]Restart MCP Server[/cyan]")
             _op_restart_server()
+
+        elif choice in ("h", "H"):
+            _print_banner(active)
+            console.rule("[cyan]CLI History[/cyan]")
+            _op_history()
 
         else:
             console.print("[red]Invalid option.[/red]")
