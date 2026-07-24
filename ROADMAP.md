@@ -472,6 +472,58 @@ cross-tenant anomaly rules from the spec. Read-only by construction.
 - Credible scheduled-ops MVP (Phases 1, 2, 3a): ~4–6 weeks part-time given
   the Expert/tool layer already exists.
 
+## Snippet template backlog
+
+MSSP-helpful SCM snippet templates beyond the existing NCSC/NIST pair
+(`scm_create_ncsc_snippet` / `scm_create_nist_snippet` in
+`tools/ncsc_baseline.py`), ranked by value ÷ effort:
+
+1. **Tier snippet builder (Bronze/Silver/Gold)** — wire up the already-written
+   `SNIPPET_TEMPLATES` spec in `audit/tiers.py` as real `client.snippet.create()`
+   calls; lowest effort, content is fully specified already.
+2. **ISO 27001:2022 snippet** — parity with NCSC/NIST; `audit/iso27001_controls.py`
+   already has the Annex A catalogue + BPA mappings.
+3. **NHS DSPT snippet** — same parity gap; `audit/dspt_controls.py` already maps
+   Standards 7–10 to BPA checks.
+4. **PCI DSS v4.0 CDE snippet** — net-new framework: zone protection + decryption
+   exclusions for card-data flows, strict egress logging, no-decrypt rule for
+   payment processors.
+5. **Ransomware-readiness snippet** — WildFire ransomware detonation signatures,
+   DNS Security C2/DGA sinkholing, decryption coverage for SMB lateral movement,
+   backup-traffic isolation guidance.
+6. **Zero Trust segmentation baseline snippet** — App-ID default-deny
+   microsegmentation + dynamic-address-group tagging convention (NIST SP 800-207).
+7. **Standalone SSL/TLS decryption best-practice snippet** — promote the
+   unbuilt `MSSP-Gold-Decryption*` tier spec to its own reusable snippet.
+8. **Standalone DNS Security / sinkhole snippet** — split out of anti-spyware
+   so it's a shared building block across the frameworks above.
+9. **GlobalProtect / remote-access hardening snippet** — HIP-based posture +
+   MFA-enforcement checks; no existing snippet touches remote access today.
+10. **"Day-1 Fast Start" onboarding snippet** — minimal safe-by-default bundle
+    for a brand-new tenant before full tier assignment completes.
+
+**Do this before framework #3**: extract a shared `build_and_create_snippet()`
+helper — NCSC/NIST already duplicate ~130 lines of create/dry-run/error-handling
+logic nearly verbatim; a third framework copying it verbatim is the point to
+parameterize by a `TemplateSet`-like dataclass instead.
+
+**Standing caveat for all 10**: `client.snippet.associate_folder()` /
+`disassociate_folder()` raise `NotImplementedError` in the installed SDK
+(0.15.1) — every future `scm_create_*_snippet` tool can create and populate a
+snippet but cannot attach it to a tenant folder programmatically; that stays a
+manual portal step until PAN ships the endpoint. Note `mssp_onboard_tenant`'s
+current "associate" step doesn't even attempt the SDK call today — it just
+logs success unconditionally (existing tech debt, not fixed here).
+
+**Reusable references**: [pan-scm-sdk](https://github.com/cdot65/pan-scm-sdk)
+([Snippet resource docs](https://cdot65.github.io/pan-scm-sdk/sdk/config/setup/snippet/)) ·
+[paloaltonetworks-automation-examples](https://github.com/cdot65/paloaltonetworks-automation-examples) ·
+[cdot65.scm Ansible collection](https://cdot65.github.io/pan-scm-ansible/) ·
+[terraform-provider-scm](https://github.com/PaloAltoNetworks/terraform-provider-scm) /
+[terraform-scm-access-modules](https://github.com/PaloAltoNetworks/terraform-scm-access-modules) ·
+[Built-In Best Practices docs](https://docs.paloaltonetworks.com/cloud-management/administration/overview/built-in-best-practices) ·
+[SCM API Best Practices](https://pan.dev/scm/docs/api-best-practices/).
+
 ## How additions happen
 
 1. `scm_check_updates` (or the spec-drift section) flags a new family/file.
