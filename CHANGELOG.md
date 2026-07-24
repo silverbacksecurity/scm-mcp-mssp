@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-24
+
 ### Added
+- **Non-interactive `scm-mcp-cli` subcommands + audit history log** (`cli_commands.py`, `cli_ops.py`, `history.py`) — `scm-mcp-cli backup|bpa|ncsc|asbuilt|audit-report --tenant KEY|--all-tenants` for cron/CI use, plus `list-tenants` and `history`. Report-generation logic is extracted out of the interactive menu handlers into Rich-free `run_*` functions in `cli_ops.py` so the menu and the new subcommands share one implementation instead of diverging. Also adds a local audit trail (`logs/cli_history.jsonl`, gitignored) recording backups, reports, tenant add/select, and server restarts from both the menu and the CLI, viewable via the new History (`H`) menu option or `scm-mcp-cli history`
 - **`scm_adem_query`** (`tools/adem.py`) — general-purpose query tool over all 13 `access/adem` telemetry paths (agent properties/metrics/scores, application metrics/scores, internet metrics, nav traffic, route hops, RUM metrics/scores, Zoom participant/QoS), consolidating the family the way `scm_insights_query` did for Insights. `extract_adem` in the AS-BUILT/MSR extractor still covers `agent_score`/`application_score` internally; this tool adds ad-hoc access to those plus the 11 other paths. Per-view parameter support (`endpoint-type`/`response-type` enums, `filter` requirements) is encoded per-endpoint against the live OpenAPI spec rather than guessed, so an invalid combination fails with a helpful message instead of a raw 400. Live-validated on a lab tenant: 9 of 13 views return real `200`s with tenant-scoped data; `agent_properties`/`route_hops` correctly refuse without a real `agent_uuid`/`site_id`/`probe_uuid` filter; `zoom_participant` 400s on an upstream backend quirk unrelated to request params. 23 tests
 
 ### Fixed
