@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **SD-WAN WAN IP RFC1918 flagging + detected-public-IP ISP attribution** (`audit/asbuilt_report.py`, `audit/extractor.py`, `utils/ipenrich.py`) — AS-BUILT §4.2.1 now flags RFC1918 addresses on circuits marked `used_for=public` inline (independent of `enrich_wan_ips`, since it's a config-sanity check, not an external lookup). New §8.1.4 renders each ION's post-NAT detected public IP (previously only reachable via the standalone `sdwan_wan_ip_summary` tool, now shared via `extract_sdwan_detected_public_ips()` so the AS-BUILT pipeline gets the same data) with ISP/ASN attribution and flags configured-vs-detected mismatches (NAT/CGNAT). Also adds `"ripe"` (stat.ripe.net, free, no key) as a third `ip_enrichment_provider` alongside `ip-api`/`ipinfo`, deduplicated per /24 (v4) or /48 (v6) prefix since RIPE data is announced per-prefix. Live-tested against three lab tenants: one with no SD-WAN (confirms graceful degradation), one small SD-WAN deployment, and one larger multi-site SD-WAN deployment (16 sites, 53 WAN IP records) — including a real stat.ripe.net lookup to validate the RIPE response parsing against the actual API shape. 20 new tests (741 → 761)
+
 ### Changed
 - Bumped `prisma-sase` dependency floor from `>=6.6.2b1` to `>=6.8.1b1`
 
