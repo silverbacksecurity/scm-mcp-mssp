@@ -155,14 +155,16 @@ def dispatch(args: argparse.Namespace) -> int:
         return _run_for_each(
             args,
             "asbuilt_report",
-            lambda t, p: cli_ops.run_asbuilt(
-                t,
-                output_format=args.format,
-                customer_name=args.customer_name,
-                mssp_name=args.mssp_name,
-                doc_version=args.doc_version,
-                on_progress=p,
-            ).path,
+            lambda t, p: (
+                cli_ops.run_asbuilt(
+                    t,
+                    output_format=args.format,
+                    customer_name=args.customer_name,
+                    mssp_name=args.mssp_name,
+                    doc_version=args.doc_version,
+                    on_progress=p,
+                ).path
+            ),
         )
 
     if args.command == "audit-report":
