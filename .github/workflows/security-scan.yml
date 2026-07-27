@@ -38,7 +38,10 @@ jobs:
           # PYSEC-2026-3447 (setuptools 78.1.1) suppressed: pan-scm-sdk==0.15.1 pins
           # setuptools>=78.1.1,<79.0.0; forcing a newer setuptools breaks pip's real
           # dependency resolution against pan-scm-sdk's own wheel metadata (verified —
-          # not just a version-string mismatch). Upgrade tracked pending upstream SDK update.
+          # not just a version-string mismatch). Same finding surfaces as GitHub
+          # Dependabot alert GHSA-h35f-9h28-mq5c / CVE-2026-59890 (same advisory,
+          # different DB ID) — also ignored in dependabot.yml so it isn't retried
+          # weekly. Upgrade tracked pending upstream SDK update.
           uvx pip-audit --require-hashes --strict \
             --ignore-vuln PYSEC-2026-3447 \
             --requirement /tmp/requirements.txt
