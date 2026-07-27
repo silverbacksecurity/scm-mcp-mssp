@@ -2762,11 +2762,33 @@ class AsBuiltReportBuilder:
         # 4.2 Underlay WAN Configuration
         self._h(3, "4.2 Underlay WAN Configuration")
         if snap.sdwan_wan_networks:
+            # The live wannetworks API never populates provider_as_n, so fall back to
+            # the ISP/ASN enrichment already computed for §4.2.1 (snap.sdwan_wan_ips),
+            # keyed by matching wan_network name to this network's name. Degrades
+            # gracefully to the manual-input stub when no enrichment was run.
+            network_isp: dict[str, str] = {}
+            for w in snap.sdwan_wan_ips:
+                wn = w.get("wan_network")
+                if not wn or wn in network_isp:
+                    continue
+                enr = w.get("enrichment") or []
+                if not enr:
+                    continue
+                isp_str = ", ".join(
+                    dict.fromkeys(
+                        f"{e.get('isp') or e.get('org') or '—'} ({e.get('asn') or '—'})"
+                        for e in enr
+                    )
+                )
+                if isp_str:
+                    network_isp[wn] = isp_str
             rows = [
                 [
                     n.get("name", _NA),
                     n.get("type", _NA),
-                    str(n.get("provider_as_n", "")) or _NA,
+                    str(n.get("provider_as_n", ""))
+                    or network_isp.get(n.get("name", ""), "")
+                    or _NA,
                 ]
                 for n in snap.sdwan_wan_networks
             ]

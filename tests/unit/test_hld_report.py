@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from scm_mcp_mssp.audit.asbuilt_report import _NA, _nested
 from scm_mcp_mssp.audit.asbuilt_report import AsBuiltReportBuilder as HLDReportBuilder
-from scm_mcp_mssp.audit.asbuilt_report import _nested
 from scm_mcp_mssp.audit.models import AuditSnapshot
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -591,6 +591,112 @@ class TestSDWanWanIpEnrichmentAndDetectedIps:
         ]
         md = _build(empty_snap)
         assert "matches configured WAN IP" in md
+
+
+class TestSection42ProviderAsFromEnrichment:
+    """§4.2 'Provider AS' column cross-references §4.2.1 wan_ips enrichment,
+    since the live wannetworks API never populates provider_as_n itself."""
+
+    def test_provider_as_from_wan_ip_enrichment_when_provider_as_n_empty(
+        self, empty_snap: AuditSnapshot
+    ) -> None:
+        empty_snap.sdwan_wan_networks = [{"name": "ISP2", "type": "publicwan", "provider_as_n": ""}]
+        empty_snap.sdwan_wan_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_name": "ION-1",
+                "interface_name": "1",
+                "used_for": "public",
+                "wan_network": "ISP2",
+                "operational_state": "up",
+                "ipv4_addresses": ["31.121.13.73/29"],
+                "ipv6_addresses": [],
+                "enrichment": [
+                    {
+                        "isp": "British Telecommunications PLC",
+                        "asn": "AS2856",
+                    }
+                ],
+            }
+        ]
+        md = _build(empty_snap)
+        assert "British Telecommunications PLC (AS2856)" in md
+
+    def test_provider_as_falls_back_to_manual_input_without_enrichment(
+        self, empty_snap: AuditSnapshot
+    ) -> None:
+        empty_snap.sdwan_wan_networks = [{"name": "ISP2", "type": "publicwan", "provider_as_n": ""}]
+        empty_snap.sdwan_wan_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_name": "ION-1",
+                "interface_name": "1",
+                "used_for": "public",
+                "wan_network": "ISP2",
+                "operational_state": "up",
+                "ipv4_addresses": ["31.121.13.73/29"],
+                "ipv6_addresses": [],
+                # no "enrichment" key at all — enrichment was never run.
+            }
+        ]
+        md = _build(empty_snap)
+        assert _NA in md
+
+    def test_provider_as_n_preferred_over_enrichment_when_present(
+        self, empty_snap: AuditSnapshot
+    ) -> None:
+        empty_snap.sdwan_wan_networks = [
+            {"name": "ISP2", "type": "publicwan", "provider_as_n": "64512"}
+        ]
+        empty_snap.sdwan_wan_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_name": "ION-1",
+                "interface_name": "1",
+                "used_for": "public",
+                "wan_network": "ISP2",
+                "operational_state": "up",
+                "ipv4_addresses": ["31.121.13.73/29"],
+                "ipv6_addresses": [],
+                "enrichment": [
+                    {
+                        "isp": "British Telecommunications PLC",
+                        "asn": "AS2856",
+                    }
+                ],
+            }
+        ]
+        md = _build(empty_snap)
+        section_42 = md.split("4.2 Underlay WAN Configuration", 1)[1].split(
+            "4.2.1 Live WAN IP Addresses", 1
+        )[0]
+        assert "64512" in section_42
+        assert "British Telecommunications PLC (AS2856)" not in section_42
+
+    def test_no_crash_when_wan_networks_present_but_wan_ips_empty(
+        self, empty_snap: AuditSnapshot
+    ) -> None:
+        empty_snap.sdwan_wan_networks = [{"name": "ISP2", "type": "publicwan", "provider_as_n": ""}]
+        md = _build(empty_snap)  # must not raise
+        assert "4.2 Underlay WAN Configuration" in md
+        assert _NA in md
+
+    def test_no_crash_when_wan_networks_empty(self, empty_snap: AuditSnapshot) -> None:
+        empty_snap.sdwan_wan_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_name": "ION-1",
+                "interface_name": "1",
+                "used_for": "public",
+                "wan_network": "ISP2",
+                "operational_state": "up",
+                "ipv4_addresses": ["31.121.13.73/29"],
+                "ipv6_addresses": [],
+                "enrichment": [{"isp": "British Telecommunications PLC", "asn": "AS2856"}],
+            }
+        ]
+        md = _build(empty_snap)  # must not raise
+        assert "4.2 Underlay WAN Configuration" in md
 
 
 # ── Section 5: SSE & Zero Trust ──────────────────────────────────────────────

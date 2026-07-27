@@ -149,13 +149,13 @@ class Settings(BaseSettings):
 
     # ── WAN IP enrichment ──────────────────────────────────────────────────
     ip_enrichment_provider: str = Field(
-        "ip-api",
+        "ripe",
         description=(
             "IP-intelligence provider for WAN IP enrichment (enrich=true on "
-            "the WAN IP tools): 'ip-api' (ip-api.com free batch tier, no key, "
-            "HTTP-only), 'ipinfo' (ipinfo.io, HTTPS, optional token), or "
-            "'ripe' (stat.ripe.net, free, no key, ASN/holder/netname only — "
-            "no reverse DNS or geolocation)."
+            "the WAN IP tools): 'ripe' (stat.ripe.net, free, no key, HTTPS, "
+            "ASN/holder/netname — recommended default), 'ip-api' (ip-api.com "
+            "free batch tier, no key, HTTP-only, rate-limited), or 'ipinfo' "
+            "(ipinfo.io, HTTPS, optional token for higher rate limits)."
         ),
     )
     ipinfo_token: SecretStr = Field(
