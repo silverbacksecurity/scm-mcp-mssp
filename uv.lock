@@ -985,14 +985,14 @@ wheels = [
 
 [[package]]
 name = "prisma-sase"
-version = "6.6.2b1"
+version = "6.8.1b1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
     { name = "urllib3" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/6f/f0e70bf36e285d34c904322713795c1f4a7841a9bf3ca59c47f235ca0d90/prisma_sase-6.6.2b1.tar.gz", hash = "sha256:29c2ecb20b218484c18ca4332c61483be9d144d9e192923c089fd5332afbbfa1", size = 131405, upload-time = "2026-02-12T13:05:14.34Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/5a/154cb460c7b82238dc963b05408901b5fd2ca52384a91537451ba27785d0/prisma_sase-6.8.1b1.tar.gz", hash = "sha256:7cead62aeab700827eae07b3ea1ec9c4b834d5fbf5f10fc1bca6bf59186548f0", size = 135026, upload-time = "2026-07-22T13:54:31.744Z" }
 
 [[package]]
 name = "pycparser"
@@ -1529,7 +1529,7 @@ requires-dist = [
     { name = "markdown", specifier = ">=3.10.2" },
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "pan-scm-sdk", specifier = ">=0.15.1" },
-    { name = "prisma-sase", specifier = ">=6.6.2b1" },
+    { name = "prisma-sase", specifier = ">=6.8.1b1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "pyjwt", specifier = ">=2.0" },

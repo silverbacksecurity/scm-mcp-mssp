@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped `prisma-sase` dependency floor from `>=6.6.2b1` to `>=6.8.1b1`
+
 ## [0.12.0] - 2026-07-24
 
 ### Added
