@@ -167,6 +167,9 @@ class AuditSnapshot:
     sdwan_wan_ips: list[dict[str, Any]] = field(
         default_factory=list
     )  # live public/private WAN IPs per element interface
+    sdwan_detected_public_ips: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # post-NAT public IP per element, from element status config_and_events_from
 
     # NGFW managed-device WAN/internet-facing interface IPs (parsed from local
     # running-config XML via the NGFW Operations API — best-effort, requires entitlement)

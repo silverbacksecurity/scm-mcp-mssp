@@ -153,7 +153,9 @@ class Settings(BaseSettings):
         description=(
             "IP-intelligence provider for WAN IP enrichment (enrich=true on "
             "the WAN IP tools): 'ip-api' (ip-api.com free batch tier, no key, "
-            "HTTP-only) or 'ipinfo' (ipinfo.io, HTTPS, optional token)."
+            "HTTP-only), 'ipinfo' (ipinfo.io, HTTPS, optional token), or "
+            "'ripe' (stat.ripe.net, free, no key, ASN/holder/netname only — "
+            "no reverse DNS or geolocation)."
         ),
     )
     ipinfo_token: SecretStr = Field(

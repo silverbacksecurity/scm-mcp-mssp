@@ -1047,11 +1047,14 @@ Args:
                       Uses the same SCM OAuth token — no extra credentials.
     enrich_wan_ips:   If True, reverse-look-up each public WAN IP (ISP,
                       ASN, geolocation) and add ISP/Geo/Drift columns to
-                      the §4.2.1 SD-WAN and §3.4.7 NGFW WAN IP tables.
-                      Sends tenant public IPs to the configured
-                      IP-intelligence provider (see ip_enrichment_provider
-                      setting) — opt-in for that reason. Results are
-                      disk-cached 30 days, so re-runs cost no lookups.
+                      the §4.2.1 SD-WAN and §3.4.7 NGFW WAN IP tables,
+                      and populate §8.1.4 (SD-WAN detected public IPs
+                      and ISP attribution, with configured-vs-detected
+                      NAT/CGNAT mismatch notes). Sends tenant public IPs
+                      to the configured IP-intelligence provider (see
+                      ip_enrichment_provider setting) — opt-in for that
+                      reason. Results are disk-cached 30 days, so
+                      re-runs cost no lookups.
 
 Returns:
     Job ID string. Call scm_asbuilt_result(job_id) once extraction completes.

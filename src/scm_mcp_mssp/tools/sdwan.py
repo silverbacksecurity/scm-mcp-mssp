@@ -329,7 +329,7 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
             connected[, enrichment]}).
         """
         try:
-            from ..audit.extractor import extract_sdwan_wan_ips
+            from ..audit.extractor import extract_sdwan_detected_public_ips, extract_sdwan_wan_ips
 
             sdk = _sdwan(tenant_id)
             sites = safe_items(sdk.get.sites())
@@ -353,40 +353,8 @@ def register_sdwan_tools(mcp: FastMCP, get_scm_client_credentials: Any) -> None:
                 rec["site_address"] = geo.get("address", {})
                 rec["site_location"] = geo.get("location", {})
 
-            # Post-NAT public IP per element, as seen by the cloud controller
-            # (element status `config_and_events_from`). The only API-visible
-            # source when the WAN interface itself holds an RFC1918 address
-            # behind upstream NAT — there is no remote-exec on IONs.
-            site_by_id = {s.get("id"): s for s in sites if s.get("id")}
-            detected: list[dict[str, Any]] = []
-            for elem in elements:
-                eid = elem.get("id")
-                if not eid:
-                    continue
-                try:
-                    status_items = safe_items(sdk.get.element_status(element_id=eid))
-                except Exception as exc:
-                    errors.append(f"sdwan_element_status[{eid}]: {exc}")
-                    continue
-                status = status_items[0] if status_items else {}
-                public_ip = status.get("config_and_events_from") or ""
-                # SD-WAN parks unclaimed/unassigned elements under site_id "1"
-                elem_site_id = elem.get("site_id")
-                site_name = (
-                    "(unassigned)"
-                    if elem_site_id == "1"
-                    else site_by_id.get(elem_site_id, {}).get("name", elem_site_id)
-                )
-                detected.append(
-                    {
-                        "site_id": elem_site_id,
-                        "site_name": site_name,
-                        "element_id": eid,
-                        "element_name": elem.get("name", eid),
-                        "connected": elem.get("connected"),
-                        "detected_public_ip": public_ip,
-                    }
-                )
+            detected, detected_errors = extract_sdwan_detected_public_ips(sdk, sites, elements)
+            errors = errors + detected_errors
 
             drift_flagged = 0
             if enrich:

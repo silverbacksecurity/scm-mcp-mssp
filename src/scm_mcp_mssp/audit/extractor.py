@@ -2373,6 +2373,12 @@ def extract_sdwan_snapshot(sdwan_client: Any, snap: AuditSnapshot) -> AuditSnaps
     snap.sdwan_wan_ips = wan_ips
     snap.extraction_errors.extend(wan_ip_errors)
 
+    detected_ips, detected_ip_errors = extract_sdwan_detected_public_ips(
+        sdwan_client, snap.sdwan_sites, snap.sdwan_elements
+    )
+    snap.sdwan_detected_public_ips = detected_ips
+    snap.extraction_errors.extend(detected_ip_errors)
+
     # VPN overlay topology (direct REST — not in SDK)
     try:
         from ..audit.sdwan_topo import build_topology, topology_to_mermaid
@@ -2505,6 +2511,63 @@ def extract_sdwan_wan_ips(
                 }
             )
     return wan_ips, errors
+
+
+def extract_sdwan_detected_public_ips(
+    sdwan_client: Any,
+    sites: list[dict[str, Any]],
+    elements: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Resolve each SD-WAN element's post-NAT public IP, per element status.
+
+    Reads `config_and_events_from` from the element's operational status —
+    the post-NAT source address the cloud controller sees the ION's
+    config/events connection arriving from. The only API-visible source
+    when the WAN interface itself holds an RFC1918 address behind an
+    upstream NAT (there is no remote-exec on IONs). Caveat: it reflects
+    whichever circuit the controller connection rides (normally the
+    primary internet circuit), so a multi-WAN branch shows one NAT IP,
+    not one per circuit.
+
+    Snapshot-independent (plain sites/elements lists) so both the full
+    audit extraction pipeline and the standalone `sdwan_wan_ip_summary`
+    MCP tool share it. Returns (records, error_strings) — never raises.
+    """
+    from ..auth.sdwan import safe_items
+
+    site_by_id = {s.get("id"): s for s in sites if s.get("id")}
+    detected: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for elem in elements:
+        eid = elem.get("id")
+        if not eid:
+            continue
+        try:
+            status_items = safe_items(sdwan_client.get.element_status(element_id=eid))
+        except Exception as exc:
+            errors.append(f"sdwan_element_status[{eid}]: {exc}")
+            continue
+        status = status_items[0] if status_items else {}
+        public_ip = status.get("config_and_events_from") or ""
+        # SD-WAN parks unclaimed/unassigned elements under site_id "1"
+        elem_site_id = elem.get("site_id")
+        site_name = (
+            "(unassigned)"
+            if elem_site_id == "1"
+            else site_by_id.get(elem_site_id, {}).get("name", elem_site_id)
+        )
+        detected.append(
+            {
+                "site_id": elem_site_id,
+                "site_name": site_name,
+                "element_id": eid,
+                "element_name": elem.get("name", eid),
+                "connected": elem.get("connected"),
+                "detected_public_ip": public_ip,
+            }
+        )
+    return detected, errors
 
 
 _DRIFT_GEO_KM = 500  # IP geolocation is city-accurate at best; be conservative

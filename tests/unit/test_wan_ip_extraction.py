@@ -213,3 +213,74 @@ class TestEnrichWanIpRecords:
         assert "enrichment" not in records[1]  # private IP → no match
         assert records[2]["enrichment"][0]["ip"] == "8.8.8.8"
         assert warnings == ["one warning", "one warning"]
+
+
+class _FakeStatusResp:
+    def __init__(self, content: dict, ok: bool = True) -> None:
+        self.sdk_status = ok
+        self.sdk_content = content
+
+
+class _GetNamespace:
+    def __init__(self, by_element: dict) -> None:
+        self._by_element = by_element
+
+    def element_status(self, element_id: str) -> _FakeStatusResp:
+        if element_id not in self._by_element:
+            raise RuntimeError(f"no status for {element_id}")
+        return _FakeStatusResp(self._by_element[element_id])
+
+
+class _FakeSdwanClient:
+    def __init__(self, by_element: dict) -> None:
+        self.get = _GetNamespace(by_element)
+
+
+class TestExtractSdwanDetectedPublicIps:
+    def test_maps_detected_ip_per_element(self) -> None:
+        from scm_mcp_mssp.audit.extractor import extract_sdwan_detected_public_ips
+
+        sites = [{"id": "site-1", "name": "Branch-1"}]
+        elements = [{"id": "elem-1", "site_id": "site-1", "name": "ION-1", "connected": True}]
+        client = _FakeSdwanClient({"elem-1": {"config_and_events_from": "31.121.13.73"}})
+
+        detected, errors = extract_sdwan_detected_public_ips(client, sites, elements)
+        assert errors == []
+        assert detected == [
+            {
+                "site_id": "site-1",
+                "site_name": "Branch-1",
+                "element_id": "elem-1",
+                "element_name": "ION-1",
+                "connected": True,
+                "detected_public_ip": "31.121.13.73",
+            }
+        ]
+
+    def test_unassigned_site_id_marked(self) -> None:
+        from scm_mcp_mssp.audit.extractor import extract_sdwan_detected_public_ips
+
+        elements = [{"id": "elem-2", "site_id": "1", "name": "ION-2", "connected": False}]
+        client = _FakeSdwanClient({"elem-2": {"config_and_events_from": "203.0.113.9"}})
+
+        detected, errors = extract_sdwan_detected_public_ips(client, [], elements)
+        assert errors == []
+        assert detected[0]["site_name"] == "(unassigned)"
+        assert detected[0]["connected"] is False
+
+    def test_element_status_error_collected_not_raised(self) -> None:
+        from scm_mcp_mssp.audit.extractor import extract_sdwan_detected_public_ips
+
+        elements = [{"id": "elem-3", "site_id": "site-1", "name": "ION-3"}]
+        client = _FakeSdwanClient({})  # element_status raises for unknown id
+
+        detected, errors = extract_sdwan_detected_public_ips(client, [], elements)
+        assert detected == []
+        assert len(errors) == 1 and "elem-3" in errors[0]
+
+    def test_missing_element_id_skipped(self) -> None:
+        from scm_mcp_mssp.audit.extractor import extract_sdwan_detected_public_ips
+
+        detected, errors = extract_sdwan_detected_public_ips(_FakeSdwanClient({}), [], [{}])
+        assert detected == []
+        assert errors == []

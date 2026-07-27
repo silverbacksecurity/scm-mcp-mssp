@@ -2808,12 +2808,24 @@ class AsBuiltReportBuilder:
                 "_Live-bound IP address per internet/MPLS-facing interface, read from "
                 "element interface status (covers both static and DHCP-assigned circuits)._"
             )
+            from ..utils.ipenrich import is_rfc1918
+
+            def _fmt_addrs(addrs: list[str], is_public: bool) -> str:
+                out = []
+                for a in addrs:
+                    if is_public and is_rfc1918(a.split("/")[0]):
+                        out.append(f"{a} ⚠️ RFC1918")
+                    else:
+                        out.append(a)
+                return ", ".join(out) or "—"
+
             enriched = any(w.get("enrichment") for w in snap.sdwan_wan_ips)
             rows = []
             drift_notes: list[str] = []
             for w in snap.sdwan_wan_ips:
-                v4 = ", ".join(w.get("ipv4_addresses") or []) or "—"
-                v6 = ", ".join(w.get("ipv6_addresses") or []) or "—"
+                is_public = w.get("used_for") == "public"
+                v4 = _fmt_addrs(w.get("ipv4_addresses") or [], is_public)
+                v6 = _fmt_addrs(w.get("ipv6_addresses") or [], is_public)
                 state = w.get("operational_state") or _NA
                 state_icon = "✅" if state == "up" else ("❌" if state == "down" else "—")
                 circuit = w.get("wan_network") or w.get("circuit_name") or "—"
@@ -4938,6 +4950,74 @@ class AsBuiltReportBuilder:
                 ],
                 [[_NA, _NA, _NA, _NA, _NA, "Whitelist at customer firewalls / partner networks"]],
             )
+
+        # 8.1.4 SD-WAN Detected Public IPs & ISP Attribution
+        if snap.sdwan_sites or snap.sdwan_elements:
+            self._h(4, "8.1.4 SD-WAN Detected Public IPs & ISP Attribution")
+            if snap.sdwan_detected_public_ips:
+                self._p(
+                    "_Post-NAT public IP per ION element, read from element status "
+                    "(`config_and_events_from`) — the address the cloud controller sees the "
+                    "element's config/events connection arriving from. This is the real public "
+                    "egress IP for branches whose WAN interface itself holds an RFC1918 address "
+                    "behind an upstream NAT._"
+                )
+                configured_by_element: dict[str, list[str]] = {}
+                for w in snap.sdwan_wan_ips:
+                    if w.get("used_for") != "public":
+                        continue
+                    configured_by_element.setdefault(w.get("element_id", ""), []).extend(
+                        w.get("ipv4_addresses") or []
+                    )
+
+                enriched = any(d.get("enrichment") for d in snap.sdwan_detected_public_ips)
+                rows = []
+                for d in snap.sdwan_detected_public_ips:
+                    detected_ip = d.get("detected_public_ip") or ""
+                    connected = d.get("connected")
+                    status = (
+                        "✅ Connected"
+                        if connected
+                        else ("❌ Disconnected" if connected is False else "—")
+                    )
+                    configured = configured_by_element.get(d.get("element_id", ""), [])
+                    if not detected_ip:
+                        match = "—"
+                    elif any(detected_ip == c.split("/")[0] for c in configured):
+                        match = "✓ matches configured WAN IP"
+                    elif configured:
+                        match = f"⚠️ NAT/CGNAT — configured circuit shows {', '.join(configured)}"
+                    else:
+                        match = "—"
+                    row = [
+                        d.get("site_name") or _NA,
+                        d.get("element_name") or _NA,
+                        detected_ip or "—",
+                        status,
+                    ]
+                    if enriched:
+                        enr = d.get("enrichment") or []
+                        isp = (
+                            ", ".join(
+                                f"{e.get('isp') or e.get('org') or '—'} ({e.get('asn') or '—'})"
+                                for e in enr
+                            )
+                            or "—"
+                        )
+                        netname = ", ".join(filter(None, (e.get("netname") for e in enr))) or "—"
+                        row += [isp, netname]
+                    row.append(match)
+                    rows.append(row)
+                headers = ["Site", "ION", "Detected Public IP", "Status"]
+                if enriched:
+                    headers += ["Observed ISP (ASN)", "Netname"]
+                headers.append("vs Configured WAN IP")
+                self._table(headers, rows)
+            else:
+                self._note(
+                    "No detected public IP data returned. Run `sdwan_wan_ip_summary` directly "
+                    "to check element status visibility."
+                )
 
         # 9.2 Hardware & License Inventory
         self._h(3, "8.2 Hardware & License Inventory")

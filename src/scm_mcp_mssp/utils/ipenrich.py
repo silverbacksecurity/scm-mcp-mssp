@@ -13,6 +13,11 @@ Providers:
     bare IP addresses are sent.
   - "ipinfo"  — ipinfo.io over HTTPS, one request per IP. Optional token
     (`ipinfo_token` in settings / SCM_MCP_IPINFO_TOKEN) raises rate limits.
+  - "ripe"    — stat.ripe.net, free and unauthenticated, no key. ASN/holder/
+    netname only — no reverse DNS or geolocation. Looked up once per unique
+    /24 (v4) or /48 (v6) prefix rather than per IP, since RIPE data is
+    announced per prefix and every IP in it would return an identical
+    record; each prefix uses a 5s connect/read timeout.
 
 Enrichment sends tenant public IPs to a third-party service, so it is
 opt-in per tool call (`enrich=true`) and never runs by default. Results are
@@ -90,7 +95,24 @@ def _save_disk_cache() -> None:
 _IP_API_FIELDS = "status,message,query,reverse,isp,org,as,asname,city,regionName,country,lat,lon"
 _IP_API_BATCH_URL = "http://ip-api.com/batch"
 _IPINFO_URL = "https://ipinfo.io/{ip}/json"
+_RIPE_PREFIX_OVERVIEW_URL = "https://stat.ripe.net/data/prefix-overview/data.json"
+_RIPE_WHOIS_URL = "https://stat.ripe.net/data/whois/data.json"
 _TIMEOUT = (5, 15)
+_RIPE_TIMEOUT = (5, 5)
+
+
+def is_rfc1918(ip: str) -> bool:
+    """True if `ip` is a private address (RFC1918 or equivalent, e.g. IPv6 ULA).
+
+    Used to flag circuits marked used_for="public" whose live-bound address
+    is actually private — usually an upstream NAT the interface config
+    doesn't know about, or a mislabelled circuit. Invalid input returns
+    False rather than raising.
+    """
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
 
 
 def global_ips(raw: Iterable[str]) -> list[str]:
@@ -158,6 +180,8 @@ def enrich_public_ips(
                 fetched, warnings = _lookup_ipinfo(misses, token)
             elif provider == "ip-api":
                 fetched, warnings = _lookup_ip_api(misses)
+            elif provider == "ripe":
+                fetched, warnings = _lookup_ripe(misses)
             else:
                 return results, [f"unknown ip_enrichment_provider {provider!r}"]
         except Exception as exc:
@@ -260,4 +284,91 @@ def _lookup_ipinfo(ips: list[str], token: str) -> tuple[dict[str, dict[str, Any]
             "longitude": lon,
             "source": "ipinfo.io",
         }
+    return records, warnings
+
+
+def _ripe_prefix_key(ip: str) -> str:
+    """Group key for RIPE lookups: the /24 (v4) or /48 (v6) containing `ip`."""
+    addr = ipaddress.ip_address(ip)
+    prefixlen = 24 if addr.version == 4 else 48
+    return str(ipaddress.ip_network(f"{ip}/{prefixlen}", strict=False))
+
+
+def _whois_field(records: list[list[dict[str, Any]]], key: str) -> str:
+    """First value for `key` across RIPE whois's nested RPSL object groups."""
+    for group in records:
+        for item in group:
+            if str(item.get("key", "")).lower() == key:
+                return str(item.get("value") or "")
+    return ""
+
+
+def _lookup_ripe(ips: list[str]) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """stat.ripe.net lookup — free, unauthenticated ASN/holder/netname only.
+
+    One prefix-overview + one whois GET per unique /24 (v4) or /48 (v6)
+    prefix (RIPE data is announced per prefix, so every IP in it shares the
+    same record) rather than per IP. Each prefix gets its own 5s
+    connect/read timeout and degrades independently: a timeout or HTTP
+    error on one prefix drops only that prefix's IPs (as a warning) and
+    does not affect the others or raise.
+    """
+    records: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    groups: dict[str, list[str]] = {}
+    for ip in ips:
+        groups.setdefault(_ripe_prefix_key(ip), []).append(ip)
+
+    for prefix, members in groups.items():
+        representative = members[0]
+        try:
+            overview = requests.get(
+                _RIPE_PREFIX_OVERVIEW_URL,
+                params={"resource": representative},
+                timeout=_RIPE_TIMEOUT,
+            )
+            whois = requests.get(
+                _RIPE_WHOIS_URL, params={"resource": representative}, timeout=_RIPE_TIMEOUT
+            )
+            if overview.status_code != 200 or whois.status_code != 200:
+                warnings.append(
+                    f"{prefix}: ripe.net HTTP {overview.status_code}/{whois.status_code}"
+                )
+                continue
+            o_data = overview.json().get("data") or {}
+            w_data = whois.json().get("data") or {}
+        except Exception as exc:
+            warnings.append(f"{prefix}: ripe.net lookup failed: {exc}")
+            continue
+
+        asns = o_data.get("asns") or []
+        first_asn = asns[0] if asns else {}
+        asn = f"AS{first_asn['asn']}" if first_asn.get("asn") is not None else ""
+        holder = str(first_asn.get("holder", "") or "")
+        block = o_data.get("block") or {}
+        w_records = w_data.get("records") or []
+        netname = _whois_field(w_records, "netname")
+        descr = _whois_field(w_records, "descr")
+        country = _whois_field(w_records, "country")
+
+        record = {
+            "ip": "",
+            "reverse_dns": "",
+            "isp": netname or holder,
+            "org": descr or block.get("desc", "") or netname,
+            "asn": asn,
+            "as_name": holder,
+            "city": "",
+            "region": "",
+            "country": country,
+            "latitude": None,
+            "longitude": None,
+            "source": "ripe.net",
+            "netname": netname,
+            "ripe_block": block.get("resource", ""),
+        }
+        for ip in members:
+            rec = dict(record)
+            rec["ip"] = ip
+            records[ip] = rec
     return records, warnings

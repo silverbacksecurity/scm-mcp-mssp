@@ -482,6 +482,117 @@ class TestSDWanPlaceholders:
         assert "High Availability" in md
 
 
+class TestSDWanWanIpEnrichmentAndDetectedIps:
+    """§4.2.1 RFC1918 flagging and §8.1.4 detected-public-IP/ISP attribution."""
+
+    def test_rfc1918_flagged_on_public_circuit(self, empty_snap: AuditSnapshot) -> None:
+        empty_snap.sdwan_sites = [{"id": "site-1", "name": "Branch-1"}]
+        empty_snap.sdwan_elements = [{"id": "elem-1", "site_id": "site-1", "name": "ION-1"}]
+        empty_snap.sdwan_wan_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_name": "ION-1",
+                "interface_name": "1",
+                "used_for": "public",
+                "wan_network": "ISP2",
+                "circuit_name": "ISP2-HUB-01",
+                "config_type": "static",
+                "operational_state": "up",
+                "ipv4_addresses": ["10.100.202.9/29"],
+                "ipv6_addresses": [],
+            }
+        ]
+        md = _build(empty_snap)
+        assert "10.100.202.9/29 ⚠️ RFC1918" in md
+
+    def test_private_circuit_not_flagged(self, empty_snap: AuditSnapshot) -> None:
+        empty_snap.sdwan_sites = [{"id": "site-1", "name": "Branch-1"}]
+        empty_snap.sdwan_elements = [{"id": "elem-1", "site_id": "site-1", "name": "ION-1"}]
+        empty_snap.sdwan_wan_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_name": "ION-1",
+                "interface_name": "2",
+                "used_for": "private",
+                "operational_state": "up",
+                "ipv4_addresses": ["10.1.1.1/24"],
+                "ipv6_addresses": [],
+            }
+        ]
+        md = _build(empty_snap)
+        assert "10.1.1.1/24 ⚠️ RFC1918" not in md
+        assert "10.1.1.1/24" in md
+
+    def test_no_sdwan_renders_without_error(self, empty_snap: AuditSnapshot) -> None:
+        md = _build(empty_snap)  # must not raise (no KeyError etc.)
+        assert "Live WAN IP Addresses" in md
+
+    def test_section_8_1_4_absent_without_sdwan(self, empty_snap: AuditSnapshot) -> None:
+        md = _build(empty_snap)
+        assert "8.1.4 SD-WAN Detected Public IPs" not in md
+
+    def test_section_8_1_4_stub_when_sdwan_but_no_detected_data(
+        self, empty_snap: AuditSnapshot
+    ) -> None:
+        empty_snap.sdwan_sites = [{"id": "site-1", "name": "Branch-1"}]
+        md = _build(empty_snap)
+        assert "8.1.4 SD-WAN Detected Public IPs" in md
+        assert "No detected public IP data returned" in md
+
+    def test_section_8_1_4_shows_isp_and_nat_mismatch(self, empty_snap: AuditSnapshot) -> None:
+        empty_snap.sdwan_sites = [{"id": "site-1", "name": "Branch-1"}]
+        empty_snap.sdwan_elements = [{"id": "elem-1", "site_id": "site-1", "name": "HUB ION 1"}]
+        empty_snap.sdwan_wan_ips = [
+            {
+                "element_id": "elem-1",
+                "used_for": "public",
+                "ipv4_addresses": ["10.100.202.9/29"],
+            }
+        ]
+        empty_snap.sdwan_detected_public_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_id": "elem-1",
+                "element_name": "HUB ION 1",
+                "connected": True,
+                "detected_public_ip": "31.121.13.73",
+                "enrichment": [
+                    {
+                        "ip": "31.121.13.73",
+                        "isp": "BT-UK-AS British Telecommunications PLC",
+                        "asn": "AS2856",
+                        "netname": "BTNET-CUSTOMER",
+                    }
+                ],
+            }
+        ]
+        md = _build(empty_snap)
+        assert "31.121.13.73" in md
+        assert "AS2856" in md
+        assert "BTNET-CUSTOMER" in md
+        assert "NAT/CGNAT" in md  # configured 10.100.202.9 != detected 31.121.13.73
+
+    def test_section_8_1_4_match_when_configured_equals_detected(
+        self, empty_snap: AuditSnapshot
+    ) -> None:
+        empty_snap.sdwan_sites = [{"id": "site-1", "name": "Branch-1"}]
+        empty_snap.sdwan_elements = [{"id": "elem-1", "site_id": "site-1", "name": "HUB ION 1"}]
+        empty_snap.sdwan_wan_ips = [
+            {"element_id": "elem-1", "used_for": "public", "ipv4_addresses": ["31.121.13.73/29"]}
+        ]
+        empty_snap.sdwan_detected_public_ips = [
+            {
+                "site_name": "Branch-1",
+                "element_id": "elem-1",
+                "element_name": "HUB ION 1",
+                "connected": True,
+                "detected_public_ip": "31.121.13.73",
+            }
+        ]
+        md = _build(empty_snap)
+        assert "matches configured WAN IP" in md
+
+
 # ── Section 5: SSE & Zero Trust ──────────────────────────────────────────────
 
 
