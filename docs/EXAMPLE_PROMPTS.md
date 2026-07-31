@@ -2,7 +2,7 @@
 
 A copy/paste library of natural-language requests you can drop straight into Claude Desktop (or Cursor, or any MCP client connected to this server) to drive **scm-mcp-mssp**. No tool names or JSON required — just ask.
 
-**249 examples** across 33 categories, mirroring [`TOOL_REFERENCE.md`](TOOL_REFERENCE.md).
+**252 examples** across 33 categories, mirroring [`TOOL_REFERENCE.md`](TOOL_REFERENCE.md).
 
 ## Before you start
 
@@ -37,7 +37,7 @@ A copy/paste library of natural-language requests you can drop straight into Cla
 19. [ADEM (Digital Experience)](#19-adem-digital-experience) (4)
 20. [CDL Log Forwarding](#20-cdl-log-forwarding) (3)
 21. [Compliance Center](#21-compliance-center) (6)
-22. [Config Orchestration (Site Onboarding)](#22-config-orchestration-site-onboarding) (5)
+22. [Config Orchestration (Site Onboarding)](#22-config-orchestration-site-onboarding) (9)
 23. [CSP Licensing](#23-csp-licensing) (3)
 24. [DNS Security](#24-dns-security) (3)
 25. [Email DLP](#25-email-dlp) (3)
@@ -47,7 +47,7 @@ A copy/paste library of natural-language requests you can drop straight into Cla
 29. [Prisma Access Browser (Tenant)](#29-prisma-access-browser-tenant) (5)
 30. [Planner (Autonomous Agent)](#30-planner-autonomous-agent) (8)
 31. [Service Status](#31-service-status) (3)
-32. [SSR (Simple Service Requests)](#32-ssr-simple-service-requests) (4)
+32. [SSR (Simple Service Requests)](#32-ssr-simple-service-requests) (6)
 33. [Cross-Tool Workflows](#33-cross-tool-workflows) (20)
 
 ---
@@ -347,124 +347,127 @@ _RNHP site-onboarding API — remote networks, bandwidth allocations, IKE/IPSec 
 184. "Dry-run creating a new remote network site via config-orch for `Bristol-Branch-05`, ticket ref CHG-7734 — show me what would be created."
 185. "List the IKE crypto profiles available via the RNHP API for Customer-A."
 186. "Read the IKE gateways exposed through the site-onboarding read API — I want to cross-check them against the SCM config API's IKE gateway list."
+187. "Dry-run creating a new bandwidth allocation via the v2 site-onboarding API for Acme Corp's `uk-southeast` compute location at 500 Mbps, ticket ref CHG-7735 — don't apply it yet."
+188. "Dry-run creating a new IKE crypto profile called `IKE-AES256-SHA256` via the RNHP API for Contoso Ltd, ticket ref CHG-7736."
 
 ## 23. CSP Licensing
 
 _Customer Support Portal — Software NGFW flexible (credit-pool) licensing._
 
-187. "List all credit pools on our CSP account for the flexible NGFW licensing program."
-188. "Show me the deployment profiles (auth codes) inside credit pool `cp-88213`."
-189. "List the firewall serial numbers registered against auth code `AUTH-4521`."
+189. "List all credit pools on our CSP account for the flexible NGFW licensing program."
+190. "Show me the deployment profiles (auth codes) inside credit pool `cp-88213`."
+191. "List the firewall serial numbers registered against auth code `AUTH-4521`."
 
 ## 24. DNS Security
 
 _Domain reputation lookups and category change requests._
 
-190. "Look up the domain reputation and category for `suspicious-domain.example` on Acme Corp's tenant."
-191. "Check the category for `internal-app.contoso.com` before I whitelist it."
-192. "Submit a domain category change request to remove `false-positive-site.com` from the malware category, ticket ref INC-8821."
+192. "Look up the domain reputation and category for `suspicious-domain.example` on Acme Corp's tenant."
+193. "Check the category for `internal-app.contoso.com` before I whitelist it."
+194. "Submit a domain category change request to remove `false-positive-site.com` from the malware category, ticket ref INC-8821."
 
 ## 25. Email DLP
 
 _Email DLP incident and report access._
 
-193. "List open Email DLP incidents for Acme Corp from the last 50 events."
-194. "Get the full detail on Email DLP incident `edlp-33210`."
-195. "Pull the Email DLP report with ID `report-99012`."
+195. "List open Email DLP incidents for Acme Corp from the last 50 events."
+196. "Get the full detail on Email DLP incident `edlp-33210`."
+197. "Pull the Email DLP report with ID `report-99012`."
 
 ## 26. Insights
 
 _General-purpose Prisma Access Insights query interface (103 resource paths)._
 
-196. "Query Prisma Access Insights for the current GlobalProtect connected-user count on Acme Corp."
-197. "Pull the GP mobile-user list with locations for Contoso Ltd over the last 24 hours."
-198. "Query per-SPN bandwidth consumption for Customer-A over the last 48 hours."
-199. "Show me agent version distribution across Acme Corp's mobile-user fleet."
-200. "Schedule an Insights export of the agent user list for Contoso Ltd, then check the download status."
-201. "Once that export is ready, download it."
+198. "Query Prisma Access Insights for the current GlobalProtect connected-user count on Acme Corp."
+199. "Pull the GP mobile-user list with locations for Contoso Ltd over the last 24 hours."
+200. "Query per-SPN bandwidth consumption for Customer-A over the last 48 hours."
+201. "Show me agent version distribution across Acme Corp's mobile-user fleet."
+202. "Schedule an Insights export of the agent user list for Contoso Ltd, then check the download status."
+203. "Once that export is ready, download it."
 
 ## 27. Monthly Service Review (MSR)
 
 _Assembles the monthly customer deliverable from live tenant data._
 
-202. "Generate the Monthly Service Review pack for Acme Corp for June 2026, MSSP name 'Silverback Security', output as Word."
-203. "Build the MSR for Contoso Ltd for last month, skipping the Insights bandwidth section to keep it fast."
-204. "Give me Customer-A's MSR for the previous calendar month and save it to `reports/customer-a-msr.docx`."
+204. "Generate the Monthly Service Review pack for Acme Corp for June 2026, MSSP name 'Silverback Security', output as Word."
+205. "Build the MSR for Contoso Ltd for last month, skipping the Insights bandwidth section to keep it fast."
+206. "Give me Customer-A's MSR for the previous calendar month and save it to `reports/customer-a-msr.docx`."
 
 ## 28. Cross-Tenant Monitoring (MT Monitor)
 
 _MSP-hierarchy aggregate analytics — apps, threats, connectivity, incidents, licenses._
 
-205. "Show me cross-tenant application usage aggregated over our whole MSP hierarchy for the last 7 days."
-206. "Give me a threat summary — total, blocked, by severity — across every child tenant."
-207. "Show me connectivity status by node type across the estate — how many sites are up vs down right now?"
-208. "Pull the MSP tenant hierarchy tree so I can see the parent/child relationship structure."
-209. "Show me license setup status and allocated service-connectivity licenses across the MSP hierarchy."
+207. "Show me cross-tenant application usage aggregated over our whole MSP hierarchy for the last 7 days."
+208. "Give me a threat summary — total, blocked, by severity — across every child tenant."
+209. "Show me connectivity status by node type across the estate — how many sites are up vs down right now?"
+210. "Pull the MSP tenant hierarchy tree so I can see the parent/child relationship structure."
+211. "Show me license setup status and allocated service-connectivity licenses across the MSP hierarchy."
 
 ## 29. Prisma Access Browser (Tenant)
 
 _Enrolled users, devices, app catalog, and helpdesk request queue._
 
-210. "Give me a Prisma Access Browser summary for Acme Corp — users by status, devices by OS, posture compliance."
-211. "List all PAB-enrolled devices for Contoso Ltd running macOS."
-212. "Show me the PAB application catalog for Customer-A — I want to see what's already configured before adding a new app."
-213. "List the app groups configured in Prisma Access Browser for Acme Corp."
-214. "Show me the open helpdesk queue of user access requests in PAB for Contoso Ltd."
+212. "Give me a Prisma Access Browser summary for Acme Corp — users by status, devices by OS, posture compliance."
+213. "List all PAB-enrolled devices for Contoso Ltd running macOS."
+214. "Show me the PAB application catalog for Customer-A — I want to see what's already configured before adding a new app."
+215. "List the app groups configured in Prisma Access Browser for Acme Corp."
+216. "Show me the open helpdesk queue of user access requests in PAB for Contoso Ltd."
 
 ## 30. Planner (Autonomous Agent)
 
 _Conversational goal-to-plan execution, incident triage, estate-wide checks._
 
-215. "Run an autonomous check across all tenants: find which ones have certificates expiring this quarter and summarise per customer."
-216. "Check the status of the Planner run I kicked off a minute ago."
-217. "Fetch the final report from that Planner run once it's done."
-218. "Trigger incident-response triage for this alert: an IPSec tunnel just went down on branch-12 for Acme Corp — here's the raw alert JSON: {\"message\": \"IPSec tunnel down on branch-12\"}."
-219. "Run the tier-aware estate check across every configured tenant."
-220. "Run the estate check but limit it to just `acme-corp` and `contoso-ltd`, concurrency 2."
-221. "Ask the Planner to investigate why Contoso Ltd's mobile users can't connect and, if it finds a fix that needs a commit, don't apply it — just report back what it would do."
-222. "Run a Planner goal: 'audit every Gold-tier tenant for NCSC CAF gaps and rank them by how many critical findings each has' — read-only, no write tools approved."
+217. "Run an autonomous check across all tenants: find which ones have certificates expiring this quarter and summarise per customer."
+218. "Check the status of the Planner run I kicked off a minute ago."
+219. "Fetch the final report from that Planner run once it's done."
+220. "Trigger incident-response triage for this alert: an IPSec tunnel just went down on branch-12 for Acme Corp — here's the raw alert JSON: {\"message\": \"IPSec tunnel down on branch-12\"}."
+221. "Run the tier-aware estate check across every configured tenant."
+222. "Run the estate check but limit it to just `acme-corp` and `contoso-ltd`, concurrency 2."
+223. "Ask the Planner to investigate why Contoso Ltd's mobile users can't connect and, if it finds a fix that needs a commit, don't apply it — just report back what it would do."
+224. "Run a Planner goal: 'audit every Gold-tier tenant for NCSC CAF gaps and rank them by how many critical findings each has' — read-only, no write tools approved."
 
 ## 31. Service Status
 
 _Public PAN cloud maintenance windows and incident status._
 
-223. "Are there any upcoming PAN cloud maintenance windows relevant to Acme Corp's region in the next 14 days?"
-224. "Show me maintenance windows across every configured tenant, grouped per tenant, for the next 30 days."
-225. "Check current PAN cloud status, including Prisma Cloud and Cortex, not just SASE products."
+225. "Are there any upcoming PAN cloud maintenance windows relevant to Acme Corp's region in the next 14 days?"
+226. "Show me maintenance windows across every configured tenant, grouped per tenant, for the next 30 days."
+227. "Check current PAN cloud status, including Prisma Cloud and Cortex, not just SASE products."
 
 ## 32. SSR (Simple Service Requests)
 
 _Restricted, idempotent customer-change CRUD — URL allow/block lists, threat exceptions, decrypt exclusions._
 
-226. "Add `partner-portal.example.com` to Acme Corp's SSR-managed URL allow list, ticket ref INC-8842 — dry run first."
-227. "That looks right, apply it for real."
-228. "Remove `known-bad-site.net` from Contoso Ltd's SSR URL block list, ticket ref INC-9011."
-229. "Add threat ID `91234` to the threat-exception list for Customer-A's anti-spyware profile, ticket ref CHG-2210, and show me the before/after diff before applying."
+228. "Add `partner-portal.example.com` to Acme Corp's SSR-managed URL allow list, ticket ref INC-8842 — dry run first."
+229. "That looks right, apply it for real."
+230. "Remove `known-bad-site.net` from Contoso Ltd's SSR URL block list, ticket ref INC-9011."
+231. "Add threat ID `91234` to the threat-exception list for Customer-A's anti-spyware profile, ticket ref CHG-2210, and show me the before/after diff before applying."
+232. "Exclude the `financial-services` URL category from SSL decryption on Customer-A's no-decrypt rule, ticket ref CHG-2211 — dry run first, please."
 
 ## 33. Cross-Tool Workflows
 
 _Multi-step requests that chain several tools together — the kind of thing an MSSP engineer actually asks for._
 
-230. "Give me a full health check across every MSSP tenant: NOC dashboard, incident summary, and licence forecast, all in one go."
-231. "Before I hand this AS-BUILT to the customer, verify it against live config, and if anything drifted, tell me exactly what to regenerate."
-232. "Run a BPA assessment for Acme Corp, then use the AI compliance advisor to turn the worst findings into a remediation playbook I can send them."
-233. "Check Contoso Ltd's certificate expiry, licence forecast, and SD-WAN software status together — I want one combined risk picture before their renewal call."
-234. "Capture a drift baseline for every tenant tonight, then email me a summary tomorrow of what changed — for now just run the baseline and the check back-to-back so I can see the diff mechanics work."
-235. "Onboard Customer-F at Silver tier: check the folder doesn't already exist, dry-run the tier snippet onboarding, then apply the NCSC baseline as a dry run too — don't commit anything yet."
-236. "Pull Acme Corp's SD-WAN topology, generate the Mermaid diagram, and also generate the HTML site map — I want both for the AS-BUILT appendix."
-237. "Investigate a reported outage at Contoso Ltd's Manchester branch: check SD-WAN events, link health, and WAN IP status for that site, then tell me what's most likely wrong."
-238. "Run the full compliance trio for Meridian Health — NCSC CAF, NHS DSPT standards 7-10, and ISO 27001 — and tell me which framework they're weakest against."
-239. "Before this quarter's QBR with Acme Corp, pull their renewal brief, MSR for last month, and tier compliance report into one package."
-240. "Check whether Customer-A's remote networks in SCM config match what the site-onboarding API shows — flag any discrepancy."
-241. "Compare BPA findings between Acme Corp and Contoso Ltd and tell me which tenant is in worse shape and why."
-242. "Run a decrypt policy audit and an NCSC gap analysis together for Customer-A, then tell me if the SSL decryption gaps are also NCSC control failures."
-243. "For every Gold-tier tenant, run mssp_tier_assess and flag anyone who's fallen below 100% compliance since onboarding."
-244. "Pull SD-WAN events and audit logs for the last 24 hours across Acme Corp and correlate — did a config change cause the tunnel flap?"
-245. "Check licence forecast and mobile user stats together for Contoso Ltd — are we about to run out of GlobalProtect seats before the licence renews?"
-246. "Do a pre-change risk check for Acme Corp: commit preview on the pending changes, plus a fresh drift check, before I let the engineer commit."
-247. "Build a one-page exec summary combining the NOC dashboard, incident summary, and any tenants currently breaching their contracted tier."
-248. "Cross-check PAB posture compliance against SSPM findings for Customer-A — are the same risky devices showing up in both?"
-249. "Kick off AS-BUILT generation for every tenant that doesn't have one on file yet, one at a time, and let me know as each finishes."
+233. "Give me a full health check across every MSSP tenant: NOC dashboard, incident summary, and licence forecast, all in one go."
+234. "Before I hand this AS-BUILT to the customer, verify it against live config, and if anything drifted, tell me exactly what to regenerate."
+235. "Run a BPA assessment for Acme Corp, then use the AI compliance advisor to turn the worst findings into a remediation playbook I can send them."
+236. "Check Contoso Ltd's certificate expiry, licence forecast, and SD-WAN software status together — I want one combined risk picture before their renewal call."
+237. "Capture a drift baseline for every tenant tonight, then email me a summary tomorrow of what changed — for now just run the baseline and the check back-to-back so I can see the diff mechanics work."
+238. "Onboard Customer-F at Silver tier: check the folder doesn't already exist, dry-run the tier snippet onboarding, then apply the NCSC baseline as a dry run too — don't commit anything yet."
+239. "Pull Acme Corp's SD-WAN topology, generate the Mermaid diagram, and also generate the HTML site map — I want both for the AS-BUILT appendix."
+240. "Investigate a reported outage at Contoso Ltd's Manchester branch: check SD-WAN events, link health, and WAN IP status for that site, then tell me what's most likely wrong."
+241. "Run the full compliance trio for Meridian Health — NCSC CAF, NHS DSPT standards 7-10, and ISO 27001 — and tell me which framework they're weakest against."
+242. "Before this quarter's QBR with Acme Corp, pull their renewal brief, MSR for last month, and tier compliance report into one package."
+243. "Check whether Customer-A's remote networks in SCM config match what the site-onboarding API shows — flag any discrepancy."
+244. "Compare BPA findings between Acme Corp and Contoso Ltd and tell me which tenant is in worse shape and why."
+245. "Run a decrypt policy audit and an NCSC gap analysis together for Customer-A, then tell me if the SSL decryption gaps are also NCSC control failures."
+246. "For every Gold-tier tenant, run mssp_tier_assess and flag anyone who's fallen below 100% compliance since onboarding."
+247. "Pull SD-WAN events and audit logs for the last 24 hours across Acme Corp and correlate — did a config change cause the tunnel flap?"
+248. "Check licence forecast and mobile user stats together for Contoso Ltd — are we about to run out of GlobalProtect seats before the licence renews?"
+249. "Do a pre-change risk check for Acme Corp: commit preview on the pending changes, plus a fresh drift check, before I let the engineer commit."
+250. "Build a one-page exec summary combining the NOC dashboard, incident summary, and any tenants currently breaching their contracted tier."
+251. "Cross-check PAB posture compliance against SSPM findings for Customer-A — are the same risky devices showing up in both?"
+252. "Kick off AS-BUILT generation for every tenant that doesn't have one on file yet, one at a time, and let me know as each finishes."
 
 ---
 
