@@ -225,19 +225,18 @@ All other API-coverage Next items shipped 2026-07-17; remaining coverage
 items are blocked on RBAC, licensed tenants, PAN spec fixes, or Planner
 API-key smoke testing._
 
-- **Site Management (NGFW device onboarding)** — new API family on pan.dev
-  (`/scm/api/config/ngfw/setup/device-onboarding/site-management/`, added
-  2026-06-26). Automates configuration-variable resolution for NGFW device
-  onboarding instead of hand-provisioning each device: **Sites** (device/HA
-  pair + property values), **Properties** (customer-defined site metadata),
-  **Onboarding Rules** (ordered variable-resolution logic — string
-  substitution and IP bit-math), and **Site Groups** (organisational
-  containers). Full CRUD on all four resource types; sites/properties
-  support batch create, onboarding rules are position-orderable, claimed
-  sites can't be deleted. Not yet in the endpoint catalog or tooled — no
-  blocker, just newly discovered. Candidate for a `scm_site_management`
-  tool (SSR write-safety pattern: `dry_run` default, mandatory
-  `ticket_ref`) once scoped against the live OpenAPI spec.
+- ✅ **Site Management (NGFW device onboarding)** — shipped 2026-07-31 as
+  `scm_site_management` (`tools/site_management.py`), covering the new
+  pan.dev API family (`config/setup/device-onboarding/v1`, added
+  2026-06-26). One tool, `resource_type`-dispatched across all four
+  resources — **sites** (device/HA pair + property values), **properties**
+  (customer-defined site metadata), **onboarding-rules** (ordered
+  variable-resolution logic, plus a `:move` reorder action), and
+  **site-groups** (organisational containers) — with full CRUD (SSR
+  write-safety pattern: `dry_run` default, mandatory `ticket_ref`, never
+  injected into the request body). Site create transparently wraps the
+  single-resource call into the live API's batch `{"sites": [...]}`
+  envelope. 32 tests.
 - ✅ **Monthly Service Review pack generator** — shipped 2026-07-17 as
   `scm_msr_report` (`tools/msr.py` + `audit/msr_report.py`): period-bounded
   incidents + config jobs, cumulative SSR provenance ledger, tier-gated
@@ -269,12 +268,13 @@ API-key smoke testing._
 - ✅ **MT Monitor round 3** — shipped 2026-07-17.  24 views covering 34/36 catalog paths.
 - ✅ **Insights export workflow** — shipped 2026-07-17.  `scm_insights_export` +
   v3 export path fix.
-- **`GET /mt/pab/tenant/auth_profile`** (`sase/pab-msp`) — the one path in the
-  already-tooled PAB-for-MSP family with no consumer. `region`/`licenses`/
+- ✅ **`GET /mt/pab/tenant/auth_profile`** — shipped 2026-07-31 as
+  `scm_pab_msp_auth_profile` (`tools/pab_msp.py`), the one path in the
+  already-tooled PAB-for-MSP family that had no consumer. `region`/`licenses`/
   `directories` are covered in the AS-BUILT extractor; `scm_pab_msp_summary`/
   `_report` cover the summary and report paths; the two POST paths (tenant
-  creation, user-group creation) are deliberately excluded as writes.
-  `auth_profile` is read-only and was just missed — small addition, no blocker.
+  creation, user-group creation) remain deliberately excluded as writes.
+  Read-only, reuses the existing `_render` envelope.
 - ✅ **ADEM path enrichment** — shipped 2026-07-20 as `scm_adem_query`
   (`tools/adem.py`): one consolidated tool over all 13 `access/adem` paths
   (`extract_adem` in the extractor still covers `agent_score`/`application_score`

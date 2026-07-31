@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Site Management (NGFW device onboarding)** (`tools/site_management.py`,
+  `scm_site_management`) — one `resource_type`-dispatched tool covering the
+  new pan.dev API family (`config/setup/device-onboarding/v1`, added
+  2026-06-26, previously zero tooling): **sites** (device/HA pair + property
+  values), **properties** (customer-defined site metadata),
+  **onboarding-rules** (ordered variable-resolution logic, plus a `:move`
+  reorder action), and **site-groups** (organisational containers). Full
+  CRUD on all four resource types via the same SSR write-safety pattern as
+  `config_orch.py`: `dry_run=True` default with before/after diff, mandatory
+  `ticket_ref` recorded via audit log + tool response only — never injected
+  into the outgoing request body (the exact bug `config_orch.py` hit once
+  already). Site `create` transparently wraps the tool's one-resource-per-call
+  ergonomics into the live API's batch `{"sites": [...]}` envelope. Reuses
+  the shared `_bearer_session_for` helper from `audit/extractor.py` rather
+  than duplicating `config_orch.py`'s local copy. 32 tests
+- **`scm_pab_msp_auth_profile`** (`tools/pab_msp.py`) — small addition
+  filling the one gap in the already-tooled PAB-for-MSP family:
+  `GET /mt/pab/tenant/auth_profile`. Read-only, reuses the existing
+  `_render` envelope. 2 tests
 - **SD-WAN WAN IP RFC1918 flagging + detected-public-IP ISP attribution** (`audit/asbuilt_report.py`, `audit/extractor.py`, `utils/ipenrich.py`) — AS-BUILT §4.2.1 now flags RFC1918 addresses on circuits marked `used_for=public` inline (independent of `enrich_wan_ips`, since it's a config-sanity check, not an external lookup). New §8.1.4 renders each ION's post-NAT detected public IP (previously only reachable via the standalone `sdwan_wan_ip_summary` tool, now shared via `extract_sdwan_detected_public_ips()` so the AS-BUILT pipeline gets the same data) with ISP/ASN attribution and flags configured-vs-detected mismatches (NAT/CGNAT). Also adds `"ripe"` (stat.ripe.net, free, no key) as a third `ip_enrichment_provider` alongside `ip-api`/`ipinfo`, deduplicated per /24 (v4) or /48 (v6) prefix since RIPE data is announced per-prefix. Live-tested against three lab tenants: one with no SD-WAN (confirms graceful degradation), one small SD-WAN deployment, and one larger multi-site SD-WAN deployment (16 sites, 53 WAN IP records) — including a real stat.ripe.net lookup to validate the RIPE response parsing against the actual API shape. 20 new tests (741 → 761)
 
 ### Changed

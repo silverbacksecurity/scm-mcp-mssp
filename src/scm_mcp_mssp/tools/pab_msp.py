@@ -54,6 +54,16 @@ def _post_json(client: Any, url: str, body: dict[str, Any]) -> tuple[int, Any]:
         return resp.status_code, (resp.text or "")[:500]
 
 
+def _get_json(client: Any, url: str) -> tuple[int, Any]:
+    """GET with a fresh bearer session; return (status, parsed-or-text)."""
+    session = _bearer_session_for(client)
+    resp = session.get(url, timeout=(5, 30))
+    try:
+        return resp.status_code, resp.json()
+    except Exception:
+        return resp.status_code, (resp.text or "")[:500]
+
+
 def _render(title: str, url: str, status: int, data: Any) -> str:
     if status in (401, 403):
         return (
@@ -145,3 +155,22 @@ def register_pab_msp_tools(mcp: FastMCP, get_client: Any) -> None:
         status, data = _post_json(client, url, {"tsg_id": target})
         logger.info("pab_msp_report", report=report, status=status)
         return _render(f"PAB MSP report — {report} ({target})", url, status, data)
+
+    @mcp.tool()
+    def scm_pab_msp_auth_profile(tenant_id: str = "") -> str:
+        """Prisma Access Browser MSP tenant authentication profile.
+
+        The one path in the already-tooled PAB-for-MSP family with no
+        consumer: ``GET /mt/pab/tenant/auth_profile``. Read-only.
+
+        Args:
+            tenant_id: SCM tenant ID used for auth (MSSP mode).
+
+        Returns:
+            Markdown with a JSON payload, or an actionable message on 4xx.
+        """
+        client = get_client(tenant_id)
+        url = f"{_BASE}/tenant/auth_profile"
+        status, data = _get_json(client, url)
+        logger.info("pab_msp_auth_profile", status=status)
+        return _render("PAB MSP auth profile", url, status, data)

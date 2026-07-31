@@ -682,6 +682,12 @@ scm_pab_inventory:
   idempotent: true
   retry_policy: retry
   scope: tenant
+scm_pab_msp_auth_profile:
+  access: read
+  domain: pab
+  idempotent: true
+  retry_policy: retry
+  scope: tenant
 scm_pab_msp_report:
   access: read
   domain: pab
@@ -812,6 +818,16 @@ scm_service_maintenance:
   idempotent: true
   retry_policy: retry
   scope: cross_tenant
+scm_site_management:
+  access: write
+  domain: deployment
+  idempotent: true
+  known_failure_modes: Write operations (create/update/delete/move) use SSR pattern — dry_run
+    default, mandatory ticket_ref.  Site create wraps a single site into the API's
+    batch sites=[...] envelope.  API is the NGFW device-onboarding surface
+    (config/setup/device-onboarding/v1), unrelated to SCM Config API tools.
+  retry_policy: fail_fast
+  scope: tenant
 scm_snippet_list:
   access: read
   domain: deployment

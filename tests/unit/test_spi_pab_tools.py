@@ -4,10 +4,33 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+import scm_mcp_mssp.tools.pab_msp as pab_msp_mod
 from scm_mcp_mssp.tools.mt_interconnect import _render as spi_render
 from scm_mcp_mssp.tools.mt_interconnect import register_spi_tools
 from scm_mcp_mssp.tools.pab_msp import _render as pab_render
 from scm_mcp_mssp.tools.pab_msp import register_pab_msp_tools
+
+
+class _FakeAuthResp:
+    def __init__(self, status_code: int, data=None) -> None:
+        self.status_code = status_code
+        self._data = data
+        self.text = "" if data is None else str(data)
+
+    def json(self):
+        if self._data is None:
+            raise ValueError("no JSON body")
+        return self._data
+
+
+class _FakeAuthSession:
+    def __init__(self, resp: _FakeAuthResp) -> None:
+        self._resp = resp
+        self.calls: list[str] = []
+
+    def get(self, url, **kwargs):
+        self.calls.append(url)
+        return self._resp
 
 
 def _mcp_with_tools() -> FastMCP:
@@ -20,7 +43,12 @@ def _mcp_with_tools() -> FastMCP:
 def test_tools_register() -> None:
     mcp = _mcp_with_tools()
     names = set(mcp._tool_manager._tools)
-    assert {"scm_spi_status", "scm_pab_msp_summary", "scm_pab_msp_report"} <= names
+    assert {
+        "scm_spi_status",
+        "scm_pab_msp_summary",
+        "scm_pab_msp_report",
+        "scm_pab_msp_auth_profile",
+    } <= names
 
 
 def test_spi_rejects_unknown_view_before_client_resolution() -> None:
@@ -55,3 +83,21 @@ def test_render_truncates_large_payloads() -> None:
     big = {"data": [{"x": "y" * 100} for _ in range(500)]}
     out = spi_render("t", "https://u", 200, big)
     assert "truncated" in out
+
+
+def test_pab_msp_auth_profile_happy_path(monkeypatch) -> None:
+    mcp = _mcp_with_tools()
+    session = _FakeAuthSession(_FakeAuthResp(200, {"data": {"region": "europe"}}))
+    monkeypatch.setattr(pab_msp_mod, "_bearer_session_for", lambda client: session)
+    out = mcp._tool_manager.get_tool("scm_pab_msp_auth_profile").fn(tenant_id="t")
+    assert out.startswith("# PAB MSP auth profile")
+    assert '"region": "europe"' in out
+    assert session.calls == [f"{pab_msp_mod._BASE}/tenant/auth_profile"]
+
+
+def test_pab_msp_auth_profile_forbidden(monkeypatch) -> None:
+    mcp = _mcp_with_tools()
+    session = _FakeAuthSession(_FakeAuthResp(403))
+    monkeypatch.setattr(pab_msp_mod, "_bearer_session_for", lambda client: session)
+    out = mcp._tool_manager.get_tool("scm_pab_msp_auth_profile").fn(tenant_id="t")
+    assert "MSP role" in out

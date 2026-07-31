@@ -52,6 +52,7 @@ from .tools.sdwan import register_sdwan_tools
 from .tools.security import register_security_tools
 from .tools.service_status import register_service_status_tools
 from .tools.setup import register_setup_tools
+from .tools.site_management import register_site_management_tools
 from .tools.ssr import register_ssr_tools
 from .utils.logging import configure_logging, get_logger
 
@@ -164,6 +165,7 @@ def register_all_tools(
     register_cdl_logforwarding_tools(mcp, get_client)
     register_compliance_tools(mcp, get_client)
     register_config_orch_tools(mcp, get_client)
+    register_site_management_tools(mcp, get_client)
     register_mssp_tools(mcp, get_client, get_settings)
     register_casb_dlp_tools(mcp, get_client)
     register_ngfw_airs_tools(mcp, get_client)
