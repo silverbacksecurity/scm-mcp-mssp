@@ -27,8 +27,8 @@ reports/
 # Ad-hoc root-level report files (any filename containing these patterns)
 *hld*.md
 *hld*.docx
-*asbuilt*.md
-*asbuilt*.docx
+*[Aa][Ss][Bb][Uu][Ii][Ll][Tt]*.md
+*[Aa][Ss][Bb][Uu][Ii][Ll][Tt]*.docx
 *bpa-*.md
 *ncsc-*.md
 tenant-*.md
