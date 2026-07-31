@@ -215,14 +215,29 @@ do about it.
 
 ## Next
 
-_Last pan.dev check: 2026-07-17 — no new spec files since 2026-07-14.
-Catalog regenerated (`generated_at: 2026-07-16`, 3,883 endpoints). No other
-upstream drift. `pan-scm-sdk` is current (0.15.1 installed = PyPI latest);
-`prisma-sase` and `mcp` also current.
-All API-coverage Next items shipped 2026-07-17; remaining coverage items are
-blocked on RBAC, licensed tenants, PAN spec fixes, or Planner API-key smoke
-testing._
+_Last pan.dev check: 2026-07-31 — new API family found: Site Management
+(NGFW device onboarding, added to pan.dev 2026-06-26), not yet in the
+endpoint catalog or tooled. Compliance Framework APIs (2026-07-14) were
+already shipped as `scm_compliance_center`/`scm_compliance_framework`.
+`pan-scm-sdk` (0.15.1) and `prisma-sase` (6.8.1b1) both current with
+PyPI/GitHub latest — no SDK updates pending.
+All other API-coverage Next items shipped 2026-07-17; remaining coverage
+items are blocked on RBAC, licensed tenants, PAN spec fixes, or Planner
+API-key smoke testing._
 
+- **Site Management (NGFW device onboarding)** — new API family on pan.dev
+  (`/scm/api/config/ngfw/setup/device-onboarding/site-management/`, added
+  2026-06-26). Automates configuration-variable resolution for NGFW device
+  onboarding instead of hand-provisioning each device: **Sites** (device/HA
+  pair + property values), **Properties** (customer-defined site metadata),
+  **Onboarding Rules** (ordered variable-resolution logic — string
+  substitution and IP bit-math), and **Site Groups** (organisational
+  containers). Full CRUD on all four resource types; sites/properties
+  support batch create, onboarding rules are position-orderable, claimed
+  sites can't be deleted. Not yet in the endpoint catalog or tooled — no
+  blocker, just newly discovered. Candidate for a `scm_site_management`
+  tool (SSR write-safety pattern: `dry_run` default, mandatory
+  `ticket_ref`) once scoped against the live OpenAPI spec.
 - ✅ **Monthly Service Review pack generator** — shipped 2026-07-17 as
   `scm_msr_report` (`tools/msr.py` + `audit/msr_report.py`): period-bounded
   incidents + config jobs, cumulative SSR provenance ledger, tier-gated
