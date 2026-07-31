@@ -52,17 +52,33 @@ def _bearer_session(client: Any) -> Any:
     return sess
 
 
+class _EmailDlpError(Exception):
+    """Raised for Email DLP API errors that are not a licensing/permission gate."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
+
 def _rest_get(session: Any, url: str, params: dict | None = None) -> dict | list | None:
-    """GET with licence-gating — returns None on unlicensed/forbidden."""
+    """GET with licence-gating — returns None on unlicensed/forbidden.
+
+    Any other failure (bad request, server error, network error) raises
+    ``_EmailDlpError`` rather than propagating a raw exception, so callers can
+    degrade gracefully like every other tool in this server.
+    """
     try:
         resp = session.get(url, params=params, timeout=(5, 15))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise _EmailDlpError(0, str(exc)) from exc
     if resp.status_code in _NOT_LICENSED_STATUSES:
         return None
-    resp.raise_for_status()
-    data = resp.json()
-    return data
+    try:
+        resp.raise_for_status()
+    except Exception as exc:
+        raise _EmailDlpError(resp.status_code, str(exc)) from exc
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +126,16 @@ def register_email_dlp_tools(mcp: FastMCP, get_client: Any) -> None:
 
         # -- Report retrieval --------------------------------------------------
         if report_id:
-            data = _rest_get(session, f"{_EMAIL_DLP_BASE}/report/api/v1/reports/{report_id}")
+            try:
+                data = _rest_get(session, f"{_EMAIL_DLP_BASE}/report/api/v1/reports/{report_id}")
+            except _EmailDlpError as exc:
+                return _fmt(
+                    {
+                        "error": "email_dlp_api_error",
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    }
+                )
             if data is None:
                 return _fmt(
                     {
@@ -126,7 +151,18 @@ def register_email_dlp_tools(mcp: FastMCP, get_client: Any) -> None:
 
         # -- Single incident ---------------------------------------------------
         if incident_id:
-            data = _rest_get(session, f"{_EMAIL_DLP_BASE}/incident/api/v1/incidents/{incident_id}")
+            try:
+                data = _rest_get(
+                    session, f"{_EMAIL_DLP_BASE}/incident/api/v1/incidents/{incident_id}"
+                )
+            except _EmailDlpError as exc:
+                return _fmt(
+                    {
+                        "error": "email_dlp_api_error",
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    }
+                )
             if data is None:
                 return _fmt(
                     {
@@ -145,7 +181,16 @@ def register_email_dlp_tools(mcp: FastMCP, get_client: Any) -> None:
         if status:
             params["status"] = status
 
-        data = _rest_get(session, f"{_EMAIL_DLP_BASE}/incident/api/v1/incidents", params=params)
+        try:
+            data = _rest_get(session, f"{_EMAIL_DLP_BASE}/incident/api/v1/incidents", params=params)
+        except _EmailDlpError as exc:
+            return _fmt(
+                {
+                    "error": "email_dlp_api_error",
+                    "status_code": exc.status_code,
+                    "detail": exc.detail,
+                }
+            )
         if data is None:
             return _fmt(
                 {

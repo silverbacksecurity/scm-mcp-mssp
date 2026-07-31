@@ -120,6 +120,24 @@ class TestEmailDlpIncidents:
         assert data["total"] == 0
         assert "hint" in data
 
+    def test_list_incidents_400_returns_graceful_error(self, tools, monkeypatch) -> None:
+        session = _make_fake_session(
+            {
+                "https://api.us-west1.email.dlp.paloaltonetworks.com/incident/api/v1/incidents": FakeResp(
+                    400, {"message": "bad request"}
+                ),
+            }
+        )
+        monkeypatch.setattr(
+            "src.scm_mcp_mssp.tools.email_dlp._bearer_session",
+            lambda client: session,
+        )
+
+        result = tools["scm_email_dlp_incidents"](tenant_id="test")
+        data = json.loads(result)
+        assert data["error"] == "email_dlp_api_error"
+        assert data["status_code"] == 400
+
     def test_get_incident_by_id(self, tools, monkeypatch) -> None:
         canned = {"id": "inc-1", "status": "open", "severity": "critical"}
         session = _make_fake_session(
